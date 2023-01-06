@@ -1,0 +1,114 @@
+/*************************************************************
+
+  This is a simple demo of sending and receiving some data
+  Be sure to check out other examples!
+ *************************************************************/
+
+// Template ID, Device Name and Auth Token are provided by the Blynk.Cloud
+// See the Device Info tab, or Template settings
+#define BLYNK_TEMPLATE_ID           "TMPLExKR7Izf"
+#define BLYNK_DEVICE_NAME           "Quickstart Device"
+#define BLYNK_AUTH_TOKEN            "ousGdFtHYc9S01J0WCwi04CiXLVbKe7A"
+
+
+// Comment this out to disable prints and save space
+#define BLYNK_PRINT Serial
+
+// define the GPIO connected with Relays and switches
+#define RelayPin1 5  //D1
+#define SwitchPin1 D3   //D3 
+
+//Change the virtual pins according the rooms
+#define VPIN_BUTTON_1    V0
+
+
+// Relay State
+bool toggleState_1 = LOW; //Define integer to remember the toggle state for relay 1
+// Switch State
+bool SwitchState_1 = LOW;
+
+#include <ESP8266WiFi.h>
+#include <BlynkSimpleEsp8266.h>
+
+char auth[] = BLYNK_AUTH_TOKEN;
+
+// Your WiFi credentials.
+// Set password to "" for open networks.
+char ssid[] = "hunter22";
+char pass[] = "@Serv1234@";
+
+BlynkTimer timer;
+
+BLYNK_CONNECTED() {
+  // Request the latest state from the server
+  Blynk.syncVirtual(VPIN_BUTTON_1);
+}
+
+// When App button is pushed - switch the state
+BLYNK_WRITE(VPIN_BUTTON_1) {
+  toggleState_1 = param.asInt();
+  if(toggleState_1 == 1){
+    digitalWrite(RelayPin1, LOW);
+  }
+  else { 
+    digitalWrite(RelayPin1, HIGH);
+  }
+}
+
+// This function sends Arduino's uptime every second to Virtual Pin 2.
+void myTimerEvent()
+{
+  // You can send any value at any time.
+  // Please don't send more that 10 values per second.
+  Blynk.virtualWrite(V2, millis() / 1000);
+}
+
+void manual_control()
+{
+  if (digitalRead(SwitchPin1) == LOW && SwitchState_1 == LOW) {
+    digitalWrite(RelayPin1, LOW);
+    Blynk.virtualWrite(VPIN_BUTTON_1, HIGH);
+    toggleState_1 = HIGH;
+    SwitchState_1 = HIGH;
+    Serial.println("Switch-1 on");
+  }
+  if (digitalRead(SwitchPin1) == HIGH && SwitchState_1 == HIGH) {
+    digitalWrite(RelayPin1, HIGH);
+    Blynk.virtualWrite(VPIN_BUTTON_1, LOW);
+    toggleState_1 = LOW;
+    SwitchState_1 = 0;
+    Serial.println("Switch-1 off");
+  }
+}
+
+void setup()
+{
+  // Debug console
+  Serial.begin(115200);
+  delay(100);
+  
+  pinMode(RelayPin1, OUTPUT);
+  pinMode(SwitchPin1, INPUT_PULLUP);
+
+  //During Starting all Relays should TURN OFF
+  digitalWrite(RelayPin1, HIGH);
+  Blynk.virtualWrite(VPIN_BUTTON_1, toggleState_1);
+
+  Blynk.begin(auth, ssid, pass);
+  // You can also specify server:
+  //Blynk.begin(auth, ssid, pass, "blynk.cloud", 80);
+  //Blynk.begin(auth, ssid, pass, IPAddress(192,168,1,100), 8080);
+
+  // Setup a function to be called every second
+  timer.setInterval(1000L, myTimerEvent);
+}
+
+void loop()
+{
+  Blynk.run();
+  timer.run();
+  // You can inject your own code or combine it with other sketches.
+  // Check other examples on how to communicate with Blynk. Remember
+  // to avoid delay() function!
+  manual_control();
+}
