@@ -1,0 +1,139 @@
+/*************************************************************
+
+  Description - Room automation project which involves bathroom, fan and two LED bulb control
+  
+ *************************************************************/
+
+// Basic blynk configurtion
+#define BLYNK_TEMPLATE_ID "TMPLExKR7Izf"
+#define BLYNK_DEVICE_NAME "experimentalProj"
+#define BLYNK_AUTH_TOKEN "A-CjeZj-IF4BZjeliZDUzziOFsNgw7J_"
+#define BLYNK_PRINT Serial          // Comment this out to disable prints and save space
+
+// Required header
+#include <TimeLib.h>
+#include <ESP8266WiFi.h>
+#include <BlynkSimpleEsp8266.h>
+
+// Basic configuration variables
+// Inform when to stop the timer
+long int turnOffTimer = 0;
+// Tell whether LED bulb is On/ Off
+boolean isLedOn = false;
+// when to turn off LED bulb (in seconds) i.e. after 
+int whenToTurnOffBulbDuration = 30; // In seconds 60 seconds or 90 seconds
+// contain status of motion sensor i.e. 1 if activity detected/ 0 silent
+long motionSensorStatus;
+
+// Variable used for inside bathroom devices
+#define bathroomMotionSensor D2   //D2
+#define bathroomBulbRelay D3   //D3
+
+// Variable used for Outside bathroom - Window bulb and switch
+#define windowBulbRelay 5  //D1 - can we change with D1????
+#define windowBulbSwitch D4   //D4
+
+// virtual pins for Window bulb
+#define VPIN_BUTTON_1    V0
+
+// Relay state - Define integer to remember the toggle state for relay 1
+bool relayState1 = LOW; 
+
+// Switch State - ON (HIGH)/ OFF (LOW)
+bool switchState1 = LOW;
+
+char auth[] = BLYNK_AUTH_TOKEN;
+char ssid[] = "hunter22";
+char pass[] = "@Serv1234@";
+
+BlynkTimer timer;
+
+BLYNK_CONNECTED() {
+  // Request the latest state from the server
+  Blynk.syncVirtual(VPIN_BUTTON_1);
+}
+
+// When App button is pushed - switch the state
+BLYNK_WRITE(VPIN_BUTTON_1) {
+  relayState1 = param.asInt();
+  if(relayState1 == 1){
+    digitalWrite(windowBulbRelay, LOW);
+  }
+  else { 
+    digitalWrite(windowBulbRelay, HIGH);
+  }
+}
+
+// This function sends Arduino's uptime every second to Virtual Pin 2.
+void myTimerEvent() {
+  Blynk.virtualWrite(V2, millis() / 1000);
+}
+
+void manual_control() {
+  if (digitalRead(windowBulbSwitch) == LOW && switchState1 == LOW) {
+    digitalWrite(windowBulbRelay, LOW);
+    Blynk.virtualWrite(VPIN_BUTTON_1, HIGH);
+    relayState1 = HIGH;
+    switchState1 = HIGH;
+  }
+
+  if (digitalRead(windowBulbSwitch) == HIGH && switchState1 == HIGH) {
+    digitalWrite(windowBulbRelay, HIGH);
+    Blynk.virtualWrite(VPIN_BUTTON_1, LOW);
+    relayState1 = LOW;
+    switchState1 = LOW;
+  }
+
+  bathRoomAutomaticControl();
+}
+
+void bathRoomAutomaticControl() {
+    motionSensorStatus = digitalRead(bathroomMotionSensor);
+
+    if (motionSensorStatus == HIGH) {
+      if (turnOffTimer == 0) {
+          turnOffTimer = now() + whenToTurnOffBulbDuration;
+          digitalWrite(bathroomBulbRelay, LOW);
+          isLedOn = true;
+      }
+    } else {
+        if (now() > turnOffTimer && isLedOn) {
+          digitalWrite(bathroomBulbRelay, HIGH);
+          turnOffTimer = 0;
+          isLedOn = false;
+        }
+    }
+}
+
+void setup()
+{
+  // Debug console
+  Serial.begin(115200);
+  delay(100);
+
+  // Initial setup
+  pinMode(windowBulbRelay, OUTPUT);
+  pinMode(windowBulbSwitch, INPUT_PULLUP);
+
+  // Inside bathroom setup - make relay as output and sensor asinput
+  pinMode(bathroomBulbRelay, OUTPUT);
+  pinMode(bathroomMotionSensor, INPUT);
+
+  //During Starting all Relays should be TURN OFF
+  digitalWrite(windowBulbRelay, HIGH);
+  digitalWrite(bathroomBulbRelay, HIGH);
+  Blynk.virtualWrite(VPIN_BUTTON_1, relayState1);
+
+  Blynk.begin(auth, ssid, pass);
+
+  // Setup a function to be called every second
+  timer.setInterval(1000L, myTimerEvent);
+}
+
+void loop()
+{
+  Blynk.run();
+  timer.run();
+  // call all manual control i.e. switches, relay
+  manual_control();
+}
