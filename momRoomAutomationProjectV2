@@ -2,7 +2,20 @@
   Filename - momRoomAutomationProjectV2
   Description - Room automation project which involves bathroom, fan and two LED bulb control
   version - v2 [15/01/2023]
-  Updates - LDR module installed, and code has been update to fix the issue of infinite loop which
+  Updates/ Fixes -
+  1. created labels for measuring the parameters i.e. 
+  2. increment the timer whenever some activity captured by motion sensor
+  3. Included the debug message on blynk dashboard
+
+
+  Debug message code-
+  1 - "V0 => ON";
+  2 - "V0 => OFF";
+  3 - "MD & Timer set";
+  4 - "1. CS & Turned off";
+  5 - "2. CS & Turned off";
+  6 - "M - Turned On o/s LED"
+  7 - "M - Turned Off o/s LED"
  *************************************************************/
 
 // Basic blynk configurtion
@@ -59,6 +72,7 @@ bool switchState1 = LOW;
 char auth[] = BLYNK_AUTH_TOKEN;
 char ssid[] = "hunter22";
 char pass[] = "@Serv1234@";
+int debugMsgCode = 0;
 
 BlynkTimer timer;
 
@@ -71,15 +85,20 @@ BLYNK_CONNECTED() {
 BLYNK_WRITE(VPIN_BUTTON_1) {
   relayState1 = param.asInt();
   if(relayState1 == 1){
+    // Turned ON the bulb
     digitalWrite(windowBulbRelay, LOW);
+    debugMsgCode = 1;
   }
   else { 
+    // Turned Off the bulb
     digitalWrite(windowBulbRelay, HIGH);
+    debugMsgCode = 2;
   }
 }
 
 // This function sends Arduino's uptime every second to Virtual Pin 2.
 void myTimerEvent() {
+  Blynk.virtualWrite(V1, debugMsgCode);
   Blynk.virtualWrite(V2, millis() / 1000);
 }
 
@@ -89,6 +108,7 @@ void manual_control() {
     Blynk.virtualWrite(VPIN_BUTTON_1, HIGH);
     relayState1 = HIGH;
     switchState1 = HIGH;
+    debugMsgCode = 6;
   }
 
   if (digitalRead(windowBulbSwitch) == HIGH && switchState1 == HIGH) {
@@ -96,6 +116,7 @@ void manual_control() {
     Blynk.virtualWrite(VPIN_BUTTON_1, LOW);
     relayState1 = LOW;
     switchState1 = LOW;
+    debugMsgCode = 7;
   }
 
   bathRoomAutomaticControl();
@@ -120,6 +141,7 @@ void bathRoomAutomaticControl() {
               turnOffTimer = now() + whenToTurnOffBulbDuration;
               digitalWrite(bathroomBulbRelay, LOW);
               isLedOn = true;
+              debugMsgCode = 3;
           }
         }
 
@@ -129,6 +151,7 @@ void bathRoomAutomaticControl() {
               turnOffTimer = 0;
               isLedOn = false;
               Serial.println("condition satisfied");
+              debugMsgCode = 4;
             }
         }
     }
@@ -139,6 +162,8 @@ void bathRoomAutomaticControl() {
           turnOffTimer = 0;
           isLedOn = false;
           Serial.println("condition satisfied");
+          // condition satisfied
+          debugMsgCode = 5;
         }
     }
     
@@ -162,7 +187,8 @@ void setup()
   pinMode(bathroomBulbRelay, OUTPUT);
   pinMode(bathroomMotionSensor, INPUT);
 
-  //During Starting process - all Relays should be TURNED OFF
+  //During Starting process - all bulb should be TURNED OFF
+  // Turing relay high will turned off the bulb
   digitalWrite(windowBulbRelay, HIGH);
   digitalWrite(bathroomBulbRelay, HIGH);
   Blynk.virtualWrite(VPIN_BUTTON_1, relayState1);
