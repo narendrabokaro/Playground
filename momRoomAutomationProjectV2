@@ -54,17 +54,19 @@ int debugMsgCode = 0;
 /* GPIO Pin configuration details */
 /* ------------------------------ */
 // Sensors/ Relay connection details with GPIOs pins
-#define dayLightSensor D5   //GPIO14 - LDR sensor which tell us if its day or night
+#define windowBulbRelay D1
 #define bathroomMotionSensor D2
 #define bathroomBulbRelay D3
 // Variable used for Outside bathroom - Window bulb and switch
-#define windowBulbRelay 5  //D1 - can we change with D1????
-#define windowBulbSwitch D4   //D4
+#define windowBulbSwitch D4
+#define dayLightSensor D5
+#define iAmStillInToiletSwitch D6
 
 // virtual pins configuration
 #define WindowLedVirBttn    V0
 #define debugMsgCodeVirLabel    V1
-#define StillInToiletVirBttn    V3
+#define uptimeVirLabel    V2
+//#define StillInToiletVirBttn    V3
 #define turnOffTimerVirLabel   V4
 
 // Window Led Relay State
@@ -83,7 +85,7 @@ BlynkTimer timer;
 BLYNK_CONNECTED() {
   // Request the latest state from the server
   Blynk.syncVirtual(WindowLedVirBttn);
-  Blynk.syncVirtual(StillInToiletVirBttn);
+//  Blynk.syncVirtual(StillInToiletVirBttn);
   // Turn off timer
   Blynk.syncVirtual(turnOffTimerVirLabel);
 }
@@ -104,15 +106,15 @@ BLYNK_WRITE(WindowLedVirBttn) {
 }
 
 // When App button [StillInToiletVirBttn] is pushed - switch the state
-BLYNK_WRITE(StillInToiletVirBttn) {
-  iAmStillInToilet = param.asInt();
-  Blynk.virtualWrite(StillInToiletVirBttn, iAmStillInToilet);
-}
+//BLYNK_WRITE(StillInToiletVirBttn) {
+//  iAmStillInToilet = param.asInt();
+//  Blynk.virtualWrite(StillInToiletVirBttn, iAmStillInToilet);
+//}
 
 // Update the dashboard widgets
 void myTimerEvent() {
   Blynk.virtualWrite(debugMsgCodeVirLabel, debugMsgCode);
-  Blynk.virtualWrite(V2, millis() / 1000);
+  Blynk.virtualWrite(uptimeVirLabel, millis()/ 1000);
   Blynk.virtualWrite(turnOffTimerVirLabel, turnOffTimer);
 }
 
@@ -176,7 +178,7 @@ void bathRoomAutomaticControl() {
     // Check if current time reached the Off Timer and LED still ON
     if (now() > turnOffTimer && isBathroomLedOn) {
           // Check if bttn pressed for long stay
-          if (iAmStillInToilet == 1) {
+          if (digitalRead(iAmStillInToiletSwitch) == LOW) {
             // Increment the off timer
             turnOffTimer += whenToTurnOffBulbDuration;
             debugMsgCode = 8;
@@ -187,7 +189,7 @@ void bathRoomAutomaticControl() {
             turnOffTimer = 0;
             isBathroomLedOn = false;
             debugMsgCode = 5;
-            Serial.println("condition satisfied");
+            Serial.println("Condition satisfied");
           }     
     }
 
@@ -203,6 +205,7 @@ void setup()
   // Initial setup
   pinMode(windowBulbRelay, OUTPUT);
   pinMode(windowBulbSwitch, INPUT_PULLUP);
+  pinMode(iAmStillInToiletSwitch, INPUT_PULLUP);
 
   // LDR sensor as input
   pinMode(dayLightSensor, INPUT);
