@@ -13,7 +13,7 @@ int isAlarmSet = 0;
 int isAlarmTriggered = 0;
 
 // GPIO pin
-ThreeWire myWire(D4,D5,D2); // IO, SCLK, CE
+ThreeWire myWire(D4,D5,D2);
 RtcDS1302<ThreeWire> Rtc(myWire);
 
 void printDateTime(const RtcDateTime& dt){
@@ -67,7 +67,6 @@ void rtcSetup() {
 // duration = for how long you want to set alarm
 // alarmType = 1 for hour | 2 for Minuate
 void setAlarm(int duration, int alarmType, RtcDateTime currentTime) {
-//     timerAlert = Rtc.GetDateTime();
     int temp = 0;
 
     Serial.println("Timer SET");
@@ -83,6 +82,7 @@ void setAlarm(int duration, int alarmType, RtcDateTime currentTime) {
         isAlarmTriggered = 0;
         temp = currentTime.Hour() + duration;
         alarmHour = temp > 23 ? (temp - 24) : temp;
+        digitalWrite(D7, HIGH);
     }
 
     // alarmType for Minuate
@@ -93,6 +93,7 @@ void setAlarm(int duration, int alarmType, RtcDateTime currentTime) {
         isAlarmTriggered = 0;
         temp = currentTime.Minute() + duration;
         alarmMinute = temp > 59 ? (temp - 60) : temp;
+        digitalWrite(D7, HIGH);
     }
 
     Serial.println("alarmHour: ");
@@ -108,6 +109,7 @@ void matchAlarm(RtcDateTime currentTime) {
     if (currentTime.Hour() == alarmHour && currentTime.Minute() == alarmMinute && currentTime.Second() == alarmSecond && !isAlarmTriggered) {
         // Timer set - alarm triggered
         Serial.println("Timer Matched - alarm triggered");
+        digitalWrite(D7, LOW);
         isAlarmTriggered = 1;
     }  
 }
@@ -116,6 +118,7 @@ void setup ()
 {
     Serial.begin(57600);
     pinMode(D1, INPUT_PULLUP);
+    pinMode(D7, OUTPUT);
     // Call to setup the RTC mmodule
     rtcSetup();
 }
@@ -135,7 +138,8 @@ void loop () {
 
     // Setting the alarm for 1 minuate
     if (digitalRead(D1) == LOW) {
-        setAlarm(1, 2, now);
+        // duration, alarmType, currentTime
+        setAlarm(2, 2, now);
     }
     
     matchAlarm(now);
