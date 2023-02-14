@@ -1,21 +1,11 @@
 /*************************************************************
   Filename - momRoomAutomationProjectV2
   Description - Room automation project which involves bathroom, fan and two LED bulb control
-  version - v2 [15/01/2023]
-  Updates/ Fixes -
-  1. created labels for measuring the parameters i.e. debug message/ turnOffTimer
-  2. increment the timer whenever button is pressed from dashboard
-  3. Code clean up activity performed
-
-  Debug message reference sheet code-
-  1 - "V0 => ON";
-  2 - "V0 => OFF";
-  3 - "MD & Timer set";
-  4 - "1. CS & Turned off";
-  5 - "2. CS & Turned off";
-  6 - "M - Turned On o/s LED"
-  7 - "M - Turned Off o/s LED"
-  8 - "someone inside toilet, so timer extended"
+  version - v2 [05/02/2023]
+  Updates/ Fixes - In progress
+  1. RTC module DS1307 (i2c) integration and array manipulation
+  2. Change new way to it connect to internet
+  3. Removed debug code
  *************************************************************/
 
 // Basic blynk configurtion
@@ -26,48 +16,67 @@
 #define BLYNK_PRINT Serial          // Comment this out to disable prints and save space
 
 // Required header
-#include <TimeLib.h>
-#include <ESP8266WiFi.h>
 #include <BlynkSimpleEsp8266.h>
+// For RTC module
+#include "RTClib.h"
 
 // Basic configuration variables
-
-// Inform when to stop the timer
-long int turnOffTimer = 0;
-
 // Tell whether LED bulb is On/ Off
 boolean isBathroomLedOn = false;
-
-// when to turn off LED bulb (in seconds) i.e. after 
-int whenToTurnOffBulbDuration = 90; // In seconds 60 seconds or 90 seconds
 
 // contain status of motion sensor i.e. 1 if activity detected/ 0 silent
 long motionSensorStatus;
 
-// Store LDR sensor value
-int dayLightValue = 0;
+// Bathroom sensor - Active hours
+int activeHourStart;
+int activeHourEnd;
+
+int NoOfTimesTryConnectingInternet = 5;
+ 
 // Store the virtual app button value
 int iAmStillInToilet = 0;
-// Start with 0
-int debugMsgCode = 0;
+
+// To maintain the active alarms
+struct alarm {
+    int alarmId;
+    int alarmType;  // 1 - Daily, 2 - Weekly, 3 - Monthly
+    // Flag indicates alarm status - Enabled/disabled
+    int isAlarmSet;
+    // Flag indicate whether alarm triggered or not
+    int isAlarmTriggered;
+    int duration;
+    char whomToActivate[25];
+
+    int endTimeHour;
+    int endTimeMinute;
+    int endTimeSecond;
+};
+
+// Created this struct to maintain more than one alarms i.e. one for bathroom and another for bedroom bulb
+// 0 - bathroom timer
+// 1 - bedroom timer
+struct alarm activeAlarm[2];
 
 /* GPIO Pin configuration details */
 /* ------------------------------ */
 // Sensors/ Relay connection details with GPIOs pins
-#define windowBulbRelay D1
-#define bathroomMotionSensor D2
-#define bathroomBulbRelay D3
+// D1 and D2 allotted to RTC module DS1307
+#define windowBulbRelay D3
+#define bathroomMotionSensor D4
+#define bathroomBulbRelay D5
 // Variable used for Outside bathroom - Window bulb and switch
-#define windowBulbSwitch D4
-#define dayLightSensor D5
-#define iAmStillInToiletSwitch D6
+#define windowBulbSwitch D6
+#define iAmStillInToiletSwitch D7
+
+// RTC Module
+// D1/ D2 [5v required]
+RTC_DS1307 rtc;
+DateTime currentTime;
 
 // virtual pins configuration
 #define WindowLedVirBttn    V0
-#define debugMsgCodeVirLabel    V1
 #define uptimeVirLabel    V2
-//#define StillInToiletVirBttn    V3
-#define turnOffTimerVirLabel   V4
+#define StillInToiletVirBttn    V3  
 
 // Window Led Relay State
 bool windowLedRelayState = LOW; 
@@ -79,15 +88,116 @@ bool windowBulbSwitchState = LOW;
 char auth[] = BLYNK_AUTH_TOKEN;
 char ssid[] = "hunter22";
 char pass[] = "@Serv1234@";
+bool connected2Blynk = false;
 
 BlynkTimer timer;
+
+void checkConnection(){
+  connected2Blynk = Blynk.connected();
+  if(!connected2Blynk){
+    Serial.println("Not connected to Blynk server"); 
+    Blynk.connect(3333);  // timeout set to 10 seconds and then continue without Blynk  
+  }
+  else{
+    Serial.println("Connected to Blynk server");     
+  }
+}
+
+// For internet access
+void wifiInit() {
+  int noOfAttempt = 3;
+  WiFi.begin(ssid, pass);  
+  while (WiFi.status() != WL_CONNECTED && noOfAttempt--) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  noOfAttempt = NoOfTimesTryConnectingInternet;
+
+  Serial.println("");
+  Serial.println("WiFi connected");  
+  Serial.println("IP address: ");
+  Serial.println(WiFi.localIP());  
+  
+  Blynk.config(auth);  // in place of Blynk.begin(auth, ssid, pass);
+  Blynk.connect(3333);  // timeout set to 10 seconds and then continue without Blynk
+//  while (Blynk.connect() == false && noOfAttempt--) {
+//    // Wait until connected
+//  }
+
+  Serial.println("Connected to Blynk server");
+  noOfAttempt = NoOfTimesTryConnectingInternet;
+  timer.setInterval(60000L, checkConnection); // check if still connected every 1 minute 
+}
+
+// For RTC module setup
+void rtcSetup() {
+    if (! rtc.begin()) {
+        Serial.println("Couldn't find RTC");
+        Serial.flush();
+        while (1) delay(10);
+    }
+    
+    if (! rtc.isrunning()) {
+        Serial.println("RTC is NOT running, let's set the time!");
+        // When time needs to be set on a new device, or after a power loss, the
+        // following line sets the RTC to the date & time this sketch was compiled
+        rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+        // This line sets the RTC with an explicit date & time, for example to set
+        // January 21, 2014 at 3am you would call:
+        // rtc.adjust(DateTime(2014, 1, 21, 3, 0, 0));
+    }
+    Serial.println("RTC is running fine!!");
+}
+
+// duration = for how long you want to set alarm
+// alarmType = 1 for hour | 2 for Minute
+void setAlarm(int alarmId, int duration, int alarmType) {
+    int temp = 0;
+    // Bathroom Timer duration
+    activeAlarm[alarmId].alarmId = alarmId;
+    activeAlarm[alarmId].alarmType = alarmType;
+    // tell that alarm is set
+    activeAlarm[alarmId].isAlarmSet = 1;
+    // Set this flag so that next time, it can be set again
+    activeAlarm[alarmId].isAlarmTriggered = 0;
+    activeAlarm[alarmId].duration = duration;
+
+    // alarmType for Hour
+    temp = currentTime.hour() + duration;
+    activeAlarm[alarmId].endTimeHour = alarmType == 1 ? (temp > 23 ? (temp - 24) : temp) : currentTime.hour();
+
+    // alarmType for Minute
+    temp = currentTime.minute() + duration;
+    activeAlarm[alarmId].endTimeMinute = alarmType == 2 ? (temp > 59 ? (temp - 60) : temp) : currentTime.minute();
+
+    activeAlarm[alarmId].endTimeSecond = currentTime.second();
+    // alarmId = 0 [bathroom bulb setup] and bulb is not glowing then only setup this
+    if (alarmId == 0 && !isBathroomLedOn) {
+        // Turn ON the bulb by making relay LOW
+        digitalWrite(bathroomBulbRelay, LOW);
+        isBathroomLedOn = true;
+        Serial.println("Turn ON the bulb by making relay LOW");
+    }
+    
+    Serial.println("Timer SET Completed");
+}
+
+void matchAlarm(int alarmId) {
+    // Match condition
+    for (int i=0; i < 2; i++) {
+        if (alarmId == activeAlarm[i].alarmId && currentTime.hour() == activeAlarm[i].endTimeHour && currentTime.minute() >= activeAlarm[i].endTimeMinute && currentTime.second() >= activeAlarm[i].endTimeSecond && !activeAlarm[i].isAlarmTriggered) {
+            Serial.println("Timer Matched - alarm triggered");
+            activeAlarm[i].isAlarmSet = 0;
+            activeAlarm[i].isAlarmTriggered = 1;
+        }
+    }
+}
 
 BLYNK_CONNECTED() {
   // Request the latest state from the server
   Blynk.syncVirtual(WindowLedVirBttn);
-//  Blynk.syncVirtual(StillInToiletVirBttn);
-  // Turn off timer
-  Blynk.syncVirtual(turnOffTimerVirLabel);
+  Blynk.syncVirtual(StillInToiletVirBttn);
 }
 
 // When App button is pushed - switch the state
@@ -96,26 +206,26 @@ BLYNK_WRITE(WindowLedVirBttn) {
   if(windowLedRelayState == 1){
     // Turned ON the bulb
     digitalWrite(windowBulbRelay, LOW);
-    debugMsgCode = 1;
+    Serial.println("Turned ON the o/s bulb by app button");
   }
   else { 
     // Turned Off the bulb
     digitalWrite(windowBulbRelay, HIGH);
-    debugMsgCode = 2;
+    Serial.println("Turned OFF the o/s bulb by app button");
   }
 }
 
 // When App button [StillInToiletVirBttn] is pushed - switch the state
-//BLYNK_WRITE(StillInToiletVirBttn) {
-//  iAmStillInToilet = param.asInt();
-//  Blynk.virtualWrite(StillInToiletVirBttn, iAmStillInToilet);
-//}
+BLYNK_WRITE(StillInToiletVirBttn) {
+  iAmStillInToilet = param.asInt();
+  Blynk.virtualWrite(StillInToiletVirBttn, iAmStillInToilet);
+  Serial.println("StillInToiletVirBttn : ");
+  Serial.println(iAmStillInToilet);
+}
 
 // Update the dashboard widgets
 void myTimerEvent() {
-  Blynk.virtualWrite(debugMsgCodeVirLabel, debugMsgCode);
   Blynk.virtualWrite(uptimeVirLabel, millis()/ 1000);
-  Blynk.virtualWrite(turnOffTimerVirLabel, turnOffTimer);
 }
 
 void manual_control() {
@@ -124,7 +234,7 @@ void manual_control() {
     Blynk.virtualWrite(WindowLedVirBttn, HIGH);
     windowLedRelayState = HIGH;
     windowBulbSwitchState = HIGH;
-    debugMsgCode = 6;
+    Serial.println("Turned On o/s LED");
   }
 
   if (digitalRead(windowBulbSwitch) == HIGH && windowBulbSwitchState == HIGH) {
@@ -132,83 +242,59 @@ void manual_control() {
     Blynk.virtualWrite(WindowLedVirBttn, LOW);
     windowLedRelayState = LOW;
     windowBulbSwitchState = LOW;
-    debugMsgCode = 7;
+    Serial.println("Turned Off o/s LED");
   }
 
   bathRoomAutomaticControl();
 }
 
 void bathRoomAutomaticControl() {
-
-    dayLightValue = digitalRead(dayLightSensor);
-    Serial.println("dayLightValue : ");
-    Serial.println(dayLightValue);
-
-    // When its night
-    if (dayLightValue == HIGH) {
-        motionSensorStatus = digitalRead(bathroomMotionSensor);
-        
-        Serial.println("motionSensorStatus : ");
-        Serial.println(motionSensorStatus);
-        
+    // Bathroom Lighting hours starts from - 6 pm (18:00) till 9 am (07:00)
+    activeHourStart = 18;     //  6PM
+    activeHourEnd = 9;        // 9AM
     
+    if (currentTime.hour() >= activeHourStart || currentTime.hour() <= activeHourEnd) {
+        motionSensorStatus = digitalRead(bathroomMotionSensor);
+        // activities detected
         if (motionSensorStatus == HIGH) {
-          if (turnOffTimer == 0) {
-              turnOffTimer = now() + whenToTurnOffBulbDuration;
-              digitalWrite(bathroomBulbRelay, LOW);
-              isBathroomLedOn = true;
-              debugMsgCode = 3;
+          // Timer is not set
+          if (activeAlarm[0].isAlarmSet == 0) {
+              // int alarmId, int duration, int alarmType [
+              setAlarm(0, 1, 2);
           }
         }
-
-        /* Remove this code after some time
-        if (motionSensorStatus == LOW) {
-            if (now() > turnOffTimer && isBathroomLedOn) {
-              digitalWrite(bathroomBulbRelay, HIGH);
-              turnOffTimer = 0;
-              isBathroomLedOn = false;
-              Serial.println("condition satisfied");
-              debugMsgCode = 4;
-            }
-        }
-        */
-
     }
 
+    // Now try to match the alarm
+    matchAlarm(0);
+
     // Check if current time reached the Off Timer and LED still ON
-    if (now() > turnOffTimer && isBathroomLedOn) {
+    if (activeAlarm[0].isAlarmTriggered == 1 && isBathroomLedOn) {
           // Check if bttn pressed for long stay
           if (digitalRead(iAmStillInToiletSwitch) == LOW) {
-            // Increment the off timer
-            turnOffTimer += whenToTurnOffBulbDuration;
-            debugMsgCode = 8;
+            // Set the new timer for 1 minute
+            // int alarmId, int duration, int alarmType
+            setAlarm(0, 1, 2);
+            Serial.println("Set the new timer for 1 minute");
           } else {
             // Turn OFF the bulb by making relay high
             digitalWrite(bathroomBulbRelay, HIGH);
             // Resetting the flags
-            turnOffTimer = 0;
             isBathroomLedOn = false;
-            debugMsgCode = 5;
-            Serial.println("Condition satisfied");
+            Serial.println("Condition satisfied and turn OFF the bulb");
           }     
     }
-
-    delay(100);
 }
 
-void setup()
-{
+void setup() {
   // Debug console
   Serial.begin(115200);
-  delay(100);
+  wifiInit();
 
   // Initial setup
   pinMode(windowBulbRelay, OUTPUT);
   pinMode(windowBulbSwitch, INPUT_PULLUP);
   pinMode(iAmStillInToiletSwitch, INPUT_PULLUP);
-
-  // LDR sensor as input
-  pinMode(dayLightSensor, INPUT);
 
   // Inside bathroom setup - make relay as output and sensor asinput
   pinMode(bathroomBulbRelay, OUTPUT);
@@ -220,16 +306,26 @@ void setup()
   digitalWrite(bathroomBulbRelay, HIGH);
   Blynk.virtualWrite(WindowLedVirBttn, windowLedRelayState);
 
-  Blynk.begin(auth, ssid, pass);
+  // Call to setup the RTC mmodule
+  rtcSetup();
 
   // Setup a function to be called every second
   timer.setInterval(1000L, myTimerEvent);
+
+  delay(100);
 }
 
-void loop()
-{
-  Blynk.run();
-  timer.run();
-  // call all manual control i.e. switches, relay
-  manual_control();
+void loop() {
+    currentTime = rtc.now();
+
+    if(connected2Blynk){
+      Blynk.run();
+    }
+    timer.run();
+
+    // call all manual control i.e. switches, relay
+    manual_control();
+
+    // Standard delay
+    delay(500);
 }
