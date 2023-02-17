@@ -1,7 +1,7 @@
 /*************************************************************
   Filename - momRoomAutomationProjectV2
   Description - Room automation project which involves bathroom, fan and two LED bulb control
-  version - v2 [05/02/2023]
+  version - v2 [17/02/2023]
   Updates/ Fixes - In progress
   1. RTC module DS1307 (i2c) integration and array manipulation
   2. Change new way to it connect to internet
@@ -28,12 +28,11 @@ boolean isBathroomLedOn = false;
 long motionSensorStatus;
 
 // Bathroom sensor - Active hours
-int activeHourStart;
-int activeHourEnd;
+int activeHourStart = 18;   // 6.00 pm
+int activeHourEnd = 7;      // 7.00 am
 
 int NoOfTimesTryConnectingInternet = 5;
- 
-// Store the virtual app button value
+int bathroomLightOnDuration = 2;    // In minutes
 int iAmStillInToilet = 0;
 
 // To maintain the active alarms
@@ -121,13 +120,9 @@ void wifiInit() {
   
   Blynk.config(auth);  // in place of Blynk.begin(auth, ssid, pass);
   Blynk.connect(3333);  // timeout set to 10 seconds and then continue without Blynk
-//  while (Blynk.connect() == false && noOfAttempt--) {
-//    // Wait until connected
-//  }
-
   Serial.println("Connected to Blynk server");
   noOfAttempt = NoOfTimesTryConnectingInternet;
-  timer.setInterval(60000L, checkConnection); // check if still connected every 1 minute 
+  timer.setInterval(100000L, checkConnection); // check if still connected every 10 minute 
 }
 
 // For RTC module setup
@@ -219,8 +214,7 @@ BLYNK_WRITE(WindowLedVirBttn) {
 BLYNK_WRITE(StillInToiletVirBttn) {
   iAmStillInToilet = param.asInt();
   Blynk.virtualWrite(StillInToiletVirBttn, iAmStillInToilet);
-  Serial.println("StillInToiletVirBttn : ");
-  Serial.println(iAmStillInToilet);
+  Serial.println("StillInToiletVirBttn pressed");
 }
 
 // Update the dashboard widgets
@@ -250,8 +244,8 @@ void manual_control() {
 
 void bathRoomAutomaticControl() {
     // Bathroom Lighting hours starts from - 6 pm (18:00) till 9 am (07:00)
-    activeHourStart = 18;     //  6PM
-    activeHourEnd = 9;        // 9AM
+    // activeHourStart = 18;     //  6PM
+    // activeHourEnd = 9;        // 9AM
     
     if (currentTime.hour() >= activeHourStart || currentTime.hour() <= activeHourEnd) {
         motionSensorStatus = digitalRead(bathroomMotionSensor);
@@ -260,7 +254,7 @@ void bathRoomAutomaticControl() {
           // Timer is not set
           if (activeAlarm[0].isAlarmSet == 0) {
               // int alarmId, int duration, int alarmType [
-              setAlarm(0, 1, 2);
+              setAlarm(0, bathroomLightOnDuration, 2);
           }
         }
     }
@@ -271,10 +265,10 @@ void bathRoomAutomaticControl() {
     // Check if current time reached the Off Timer and LED still ON
     if (activeAlarm[0].isAlarmTriggered == 1 && isBathroomLedOn) {
           // Check if bttn pressed for long stay
-          if (digitalRead(iAmStillInToiletSwitch) == LOW) {
+          if (digitalRead(iAmStillInToiletSwitch) == LOW || iAmStillInToilet) {
             // Set the new timer for 1 minute
             // int alarmId, int duration, int alarmType
-            setAlarm(0, 1, 2);
+            setAlarm(0, bathroomLightOnDuration, 2);
             Serial.println("Set the new timer for 1 minute");
           } else {
             // Turn OFF the bulb by making relay high
