@@ -2,14 +2,10 @@
   Filename - momRoomAutomationProjectV2
   Description - Room automation project which involves bathroom, fan and two LED bulb control
   SPECIAL INSTRUCTION - These changes required reconfiguring the GPIO pin.
-  version - v2.1.1
-  Updates/ Fixes - In progress
-  1. debugMessageFunc(message)
-  2. on/off common func - turnBathroomBulb(ON/OFf)/ turnBulb("ON/ OFF", "OutBulb") - generic function to handle other LED bulb action
-  3. Logging data to google sheet API
-  4. Renamed the wifiinit() => wifiSetup()
-  5. Wifi reconnection rule rewrittem
-
+  version - v2.1.2
+  Updates/ Fixes -
+  > Fixed the actionMessageLogger function, turnBathroomBulb() and turnBulb() function compiler issues - changed the parameter from char * to String
+  > Internet issue - Not connecting to internet and further issue fixed - moved the wifiSetup() method inside the setup() funcction
 
   Debug instructions -
   1> Always check the active hours for bathroom lighting. Standard time - 6pm to 7am
@@ -116,8 +112,8 @@ bool windowBulbSwitchState = LOW;
 
 // Wifi configurations
 char* auth = BLYNK_AUTH_TOKEN;
-char* ssid = "<your network ssid>";
-char* password = "password";
+char* ssid = "hunter22";
+char* password = "@Serv1234@";
 bool connected2Blynk = false;
 
 // Try to reconnect after every minute
@@ -156,57 +152,44 @@ void checkConnection() {
         Serial.println("checkConnection :: Active internet connection found");
     }
 
-    blynkConnectionCheck();
-}
-
-// turnBathroomBulb("ON")
-void turnBathroomBulb(char action[15]) {
-    // Turn ON the bulb by making relay LOW
-    // Turn OFF the bulb by making relay HIGH
-    digitalWrite(bathroomBulbRelay, action == "ON" ? LOW : HIGH);
-
-    if (action == "ON") {
-        actionMessageLogger("bathroomBulbRelay :: ", "Turn ON the bathroom bulb");
-        Serial.println("bathroomBulbRelay :: Turn ON the bathroom bulb");
-    } else {
-        actionMessageLogger("bathroomBulbRelay :: ", "Turn OFF the bathroom bulb");
-        Serial.println("bathroomBulbRelay :: Turn OFF the bathroom bulb");
-    }
-}
-
-// turnBulb("ON", "OutBulb")
-void turnBulb(char action[15], char bulbLocation[15]) {
-    if (bulbLocation == "OutBulb") {
-        // Turn ON the bulb by making relay LOW else
-        digitalWrite(windowBulbRelay, action == "ON" ? LOW : HIGH);
-
-        if (action == "ON") {
-            actionMessageLogger("windowBulbRelay :: ", "Turn ON the outside bathroom bulb");
-            Serial.println("windowBulbRelay :: Turn ON the outside bathroom bulb");
-        } else {
-            actionMessageLogger("windowBulbRelay :: ", "Turn OFF the outside bathroom bulb");
-            Serial.println("windowBulbRelay :: Turn OFF the outside bathroom bulb");
-        }
+    if (WiFi.status() == WL_CONNECTED) {
+        blynkConnectionCheck();
     }
 }
 
 /*
 * This function write data into two places - NodeMCU file system (for offline support) and for google sheet API
 */
-void actionMessageLogger(char originator[20], char message[150]) {
-    if (isActionMessageLoggerRequiredFlag) {
-        DateTime now = rtc.now();
-        char buf2[] = "hh:mm:ss >> ";
-        char timelineTmp[200];
-    
-        strcat(timelineTmp, now.toString(buf2));
-        strcat(timelineTmp, originator);
-        strcat(timelineTmp, message);
-    
-        // Write to google API
-        logDataToGoogleSheet(originator, message);
-    
-        Serial.println(timelineTmp);
+void actionMessageLogger(String message) {
+//    if (isActionMessageLoggerRequiredFlag) {
+//        DateTime now = rtc.now();
+//        char buf2[] = "hh:mm:ss >> ";
+//        char *timelineTmp;
+//    
+//        strcat(timelineTmp, now.toString(buf2));
+//        strcat(timelineTmp, message);
+//    
+//        // Write to google API
+//        // logDataToGoogleSheet(originator, message);
+//    }
+
+    Serial.println(message);
+}
+
+// turnBathroomBulb("ON")
+void turnBathroomBulb(String action) {
+    // Turn ON the bulb by making relay LOW
+    // Turn OFF the bulb by making relay HIGH
+    digitalWrite(bathroomBulbRelay, action == "ON" ? LOW : HIGH);
+    actionMessageLogger(action == "ON" ? "bathroomBulbRelay :: Turn ON the bathroom bulb" : "bathroomBulbRelay :: Turn OFF the bathroom bulb");
+}
+
+// turnBulb("ON", "OutBulb")
+void turnBulb(String action, String bulbLocation) {
+    if (bulbLocation == "OutBulb") {
+        // Turn ON the bulb by making relay LOW else
+        digitalWrite(windowBulbRelay, action == "ON" ? LOW : HIGH);
+        actionMessageLogger(action == "ON" ? "windowBulbRelay :: Turn ON the outside bathroom bulb" : "windowBulbRelay :: Turn OFF the outside bathroom bulb");
     }
 }
 
@@ -351,20 +334,17 @@ void setAlarm(int alarmId, int duration, int alarmType) {
         // Turn ON the bulb by making relay LOW
         turnBathroomBulb("ON");
         isBathroomLedOn = true;
-        Serial.println("setAlarm :: Turn ON the bulb by making relay LOW");
-        actionMessageLogger("setAlarm :: ", "Turn ON the bulb by making relay LOW");
+        actionMessageLogger("setAlarm :: Turn ON the bulb by making relay LOW");
     }
-    
-    Serial.println("setAlarm :: Timer SET Completed");
-    actionMessageLogger("setAlarm :: ", "Timer SET Completed");
+
+    actionMessageLogger("setAlarm :: Timer SET Completed");
 }
 
 void matchAlarm(int alarmId) {
     // Match condition
     for (int i=0; i < 2; i++) {
         if (alarmId == activeAlarm[i].alarmId && currentTime.hour() == activeAlarm[i].endTimeHour && currentTime.minute() >= activeAlarm[i].endTimeMinute && currentTime.second() >= activeAlarm[i].endTimeSecond && !activeAlarm[i].isAlarmTriggered) {
-            Serial.println("matchAlarm :: Timer Matched - alarm triggered");
-            actionMessageLogger("matchAlarm :: ", "Timer Matched - alarm triggered");
+            actionMessageLogger("matchAlarm :: Timer Matched - alarm triggered");
             activeAlarm[i].isAlarmSet = 0;
             activeAlarm[i].isAlarmTriggered = 1;
         }
@@ -382,28 +362,15 @@ BLYNK_CONNECTED() {
 BLYNK_WRITE(WindowLedVirBttn) {
     windowLedRelayState = param.asInt();
 
-    if (windowLedRelayState == 1) {
-        turnBulb("ON", "OutBulb");
-        Serial.println("WindowLedVirBttn :: Turned ON the o/s bulb by app button");
-        actionMessageLogger("WindowLedVirBttn :: ", "Turned ON the o/s bulb by app button");
-    } else {
-        turnBulb("OFF", "OutBulb");
-        Serial.println("WindowLedVirBttn :: Turned OFF the o/s bulb by app button");
-        actionMessageLogger("WindowLedVirBttn :: ", "Turned OFF the o/s bulb by app button");
-    }
+    turnBulb(windowLedRelayState == 1 ? "ON" : "OFF", "OutBulb");
+    actionMessageLogger(windowLedRelayState == 1 ? "WindowLedVirBttn :: Turned ON the o/s bulb by app button" : "WindowLedVirBttn :: Turned OFF the o/s bulb by app button");
 }
 
 // When App button [StillInToiletVirBttn] is pushed - switch the state
 BLYNK_WRITE(StillInToiletVirBttn) {
     iAmStillInToilet = param.asInt();
     Blynk.virtualWrite(StillInToiletVirBttn, iAmStillInToilet);
-    if (iAmStillInToilet) {
-        Serial.println("StillInToiletVirBttn :: StillInToiletVirBttn ON pressed by App");
-        actionMessageLogger("StillInToiletVirBttn :: ", "StillInToiletVirBttn ON pressed by App");
-    } else {
-        Serial.println("StillInToiletVirBttn :: StillInToiletVirBttn OFF pressed by App");
-        actionMessageLogger("StillInToiletVirBttn :: ", "StillInToiletVirBttn OFF pressed by App");
-    }
+    actionMessageLogger(iAmStillInToilet ? "StillInToiletVirBttn :: StillInToiletVirBttn ON pressed by App" : "StillInToiletVirBttn :: StillInToiletVirBttn OFF pressed by App");
 }
 
 // Update the dashboard widgets
@@ -417,8 +384,7 @@ void manual_control() {
         Blynk.virtualWrite(WindowLedVirBttn, HIGH);
         windowLedRelayState = HIGH;
         windowBulbSwitchState = HIGH;
-        Serial.println("manual_control :: Turned On o/s LED by switch");
-        actionMessageLogger("manual_control :: ", "Turned On o/s LED by switch");
+        actionMessageLogger("manual_control :: Turned On o/s LED by switch");
     }
 
     if (digitalRead(windowBulbSwitch) == HIGH && windowBulbSwitchState == HIGH) {
@@ -426,8 +392,7 @@ void manual_control() {
         Blynk.virtualWrite(WindowLedVirBttn, LOW);
         windowLedRelayState = LOW;
         windowBulbSwitchState = LOW;
-        Serial.println("manual_control :: Turned Off o/s LED by switch");
-        actionMessageLogger("manual_control :: ", "Turned Off o/s LED by switch");
+        actionMessageLogger("manual_control :: Turned Off o/s LED by switch");
     }
 
     bathRoomAutomaticControl();
@@ -457,14 +422,12 @@ void bathRoomAutomaticControl() {
               // Set the new timer for 1 minute
               // int alarmId, int duration, int alarmType
               setAlarm(0, bathroomLightOnDuration, 2);
-              Serial.println("bathRoomAutomaticControl :: Set the new timer for 1 minute");
-              actionMessageLogger("bathRoomAutomaticControl :: ", "Set the new timer for 1 minute");
+              actionMessageLogger("bathRoomAutomaticControl :: Set the new timer for 1 minute");
           } else {            
               turnBathroomBulb("OFF");
               // Resetting the flags
               isBathroomLedOn = false;
-              Serial.println("bathRoomAutomaticControl :: Timer condition satisfied and turn OFF the bulb");
-              actionMessageLogger("bathRoomAutomaticControl :: ", "Timer condition satisfied and turn OFF the bulb");
+              actionMessageLogger("bathRoomAutomaticControl :: Timer condition satisfied and turn OFF the bulb");
           }     
     }
 }
@@ -473,7 +436,7 @@ void bathRoomAutomaticControl() {
 void performInitSetup() {
     if (!isInitialSetupPerformed) {
         // Setup the internet connection first
-        wifiSetup();
+        // wifiSetup();
 
         // Setup the RTC mmodule
         // rtcSetup();
@@ -508,10 +471,10 @@ void setup() {
     pinMode(bathroomMotionSensor, INPUT);
 
     // Setup the internet connection first
-    // wifiSetup();
+    wifiSetup();
 
-//     Setup the RTC mmodule
-     rtcSetup();
+    // Setup the RTC mmodule
+    rtcSetup();
 
     // Google API setup if flag is true
 //    if (isGoogleSheetLoggingRequiredFlag) {
@@ -525,7 +488,7 @@ void loop() {
     unsigned long now = millis();
     currentTime = rtc.now();
 
-    // Check internet connection after every 5 minute 
+    // Update uptime after every second 
     if (now - lastServerUpdateTime >= serverUpdateTimeout) {
         lastServerUpdateTime = now;
         updateServer();
