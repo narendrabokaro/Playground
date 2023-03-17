@@ -7,9 +7,10 @@
        need to press the switch OFF and then ON.
     2. Work normally when switch is turned OFF. Irrespective of time left, the bulb has to be turned OFF.
 
-  version - v1.0.0
+  version - v1.0.1
   Updates/ Fixes [status]
-
+  > [Fixed] Checking current time fall btw two time slot.
+  > [Fixed] - Timer set for 30 minutes, scenario - 11.45 and setting the timer now
 
   Debug instructions -
   1> Always check the active hours for bathroom lighting. Standard time - 6pm to 7am
@@ -48,6 +49,12 @@ struct alarm {
     int endTimeSecond;
 };
 
+// Time for various comparision
+struct TIME {
+    int hours;
+    int minutes;
+};
+
 // Created this struct to maintain more than one alarms i.e. one for kitchen bulb
 // 0 - kitchen timer
 struct alarm activeAlarm[1];
@@ -56,7 +63,6 @@ struct alarm activeAlarm[1];
 /* ------------------------------ */
 // Sensors/ Relay connection details with GPIOs pins
 // D2, D4 and D5 allotted to RTC module DS1302
-
 #define kitchBulbRelay D1
 #define kitchenBulbSwitch D6
 #define countof(a) (sizeof(a) / sizeof(a[0]))
@@ -68,31 +74,44 @@ Active Time frame between - 6AM to 7AM and 6PM to 9PM
     2. Work normally when switch is turned OFF. Irrespective of time left, the bulb has to be turned OFF.
 */
 // Active hours
-int morningActiveHourStart = 6;   // 6.00 am
-int morningActiveMinuteStart = 0;
-int morningActiveHourEnd = 7;      // 7.00 am
-int morningActiveMinuteEnd = 0;
+struct TIME morningActiveStartTime = {9, 0};   // 
+struct TIME morningActiveEndTime = {11, 58};
+struct TIME eveningActiveStartTime = {23, 0};
+struct TIME eveningActiveEndTime = {23, 30};
 
-int eveningActiveHourStart = 18;   // 6.00 pm
-int eveningActiveMinuteStart = 0;
-int eveningActiveHourEnd = 22;      // 10.00 pm
-int eveningActiveMinuteEnd = 0;
+// Indicate (boolean) if time if greater/less than given time
+bool diffBtwTimePeriod(struct TIME start, struct TIME stop) {
+   while (stop.minutes > start.minutes) {
+      --start.hours;
+      start.minutes += 60;
+   }
 
+   return (start.hours - stop.hours) >= 0;
+}
+
+// Set light ON duration in case time fall btw active hours
 void checkActiveHours() {
-    boolean morningActiveHour = (currentTime.Hour() >= morningActiveHourStart && currentTime.Minute() >= morningActiveMinuteStart) && (currentTime.Hour() <= morningActiveHourEnd && currentTime.Minute() <= morningActiveMinuteEnd);
-    boolean eveningActiveHour = (currentTime.Hour() >= eveningActiveHourStart && currentTime.Minute() >= eveningActiveMinuteStart) && (currentTime.Hour() <= eveningActiveHourEnd && currentTime.Minute() <= eveningActiveMinuteEnd);
-
-    Serial.println(morningActiveHour);
-    Serial.println(eveningActiveHour);
+    boolean morningActiveHour = diffBtwTimePeriod({currentTime.Hour(), currentTime.Minute()}, morningActiveStartTime) && diffBtwTimePeriod(morningActiveEndTime, {currentTime.Hour(), currentTime.Minute()});
+    boolean eveningActiveHour = diffBtwTimePeriod({currentTime.Hour(), currentTime.Minute()}, eveningActiveStartTime) && diffBtwTimePeriod(eveningActiveEndTime, {currentTime.Hour(), currentTime.Minute()});
+    
+    // Debug code - TODO
+    // Morning timing
+    Serial.println(diffBtwTimePeriod({currentTime.Hour(), currentTime.Minute()}, morningActiveStartTime));
+    Serial.println(diffBtwTimePeriod(morningActiveEndTime, {currentTime.Hour(), currentTime.Minute()}));
+    // Evening timing
+    Serial.println(diffBtwTimePeriod({currentTime.Hour(), currentTime.Minute()}, eveningActiveStartTime));
+    Serial.println(diffBtwTimePeriod(eveningActiveEndTime, {currentTime.Hour(), currentTime.Minute()}));
 
     if (morningActiveHour || eveningActiveHour) {
         // Keep the bulb On when its a active hour
         kitchenLightOnDuration = activeHourDuration;
-        Serial.println("duration : 30 min");
+        Serial.println("duration : ");
+        Serial.print(activeHourDuration);
     } else {
         // Default light duration
         kitchenLightOnDuration = nonActiveHourDuration;
-        Serial.println("duration : 5 min");
+        Serial.println("duration : ");
+        Serial.print(nonActiveHourDuration);
     }
 }
 
@@ -141,7 +160,9 @@ void unsetAlarm(int alarmId) {
 void setAlarm(int alarmId, int alarmType) {
     checkActiveHours();
 
-    int temp = 0;
+    int tempMinute = 0;
+    int tempHour = 0;
+
     int duration = kitchenLightOnDuration;
     // Bathroom Timer duration
     activeAlarm[alarmId].alarmId = alarmId;
@@ -153,12 +174,24 @@ void setAlarm(int alarmId, int alarmType) {
     activeAlarm[alarmId].duration = duration;
 
     // alarmType for Hour
-    temp = currentTime.Hour() + duration;
-    activeAlarm[alarmId].endTimeHour = alarmType == 1 ? (temp > 23 ? (temp - 24) : temp) : currentTime.Hour();
+    tempHour = currentTime.Hour() + duration;
+    activeAlarm[alarmId].endTimeHour = alarmType == 1 ? (tempHour > 23 ? (tempHour - 24) : tempHour) : currentTime.Hour();
 
     // alarmType for Minute
-    temp = currentTime.Minute() + duration;
-    activeAlarm[alarmId].endTimeMinute = alarmType == 2 ? (temp > 59 ? (temp - 60) : temp) : currentTime.Minute();
+    tempMinute = currentTime.Minute() + duration;
+    if (alarmType == 2) {
+        if (tempMinute > 59) {
+            activeAlarm[alarmId].endTimeMinute = tempMinute - 60;
+            tempHour = currentTime.Hour() + 1;
+            activeAlarm[alarmId].endTimeHour = tempHour > 23 ? (tempHour - 24) : tempHour;
+        } else {
+            activeAlarm[alarmId].endTimeMinute = tempMinute;
+        }
+    } else {
+        activeAlarm[alarmId].endTimeMinute = currentTime.Minute();
+    }
+
+    // activeAlarm[alarmId].endTimeMinute = alarmType == 2 ? (temp > 59 ? (temp - 60) : temp) : currentTime.Minute();
 
     activeAlarm[alarmId].endTimeSecond = currentTime.Second();
     // alarmId = 1 [window bulb setup] and bulb is not glowing then only setup this
@@ -259,6 +292,7 @@ void rtcSetup() {
 }
 
 void setup() {
+    
     // Debug console
     Serial.begin(57600);
     // Serial.begin(9600);
