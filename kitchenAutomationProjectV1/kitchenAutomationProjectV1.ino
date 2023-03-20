@@ -74,10 +74,10 @@ Active Time frame between - 6AM to 7AM and 6PM to 9PM
     2. Work normally when switch is turned OFF. Irrespective of time left, the bulb has to be turned OFF.
 */
 // Active hours
-struct TIME morningActiveStartTime = {9, 0};   // 
-struct TIME morningActiveEndTime = {11, 58};
-struct TIME eveningActiveStartTime = {23, 0};
-struct TIME eveningActiveEndTime = {23, 30};
+struct TIME morningActiveStartTime = {6, 0};    // 6.00AM to 7.00AM
+struct TIME morningActiveEndTime = {7, 0};
+struct TIME eveningActiveStartTime = {18, 0};   // 6.00PM to 10.00PM 
+struct TIME eveningActiveEndTime = {22, 0};
 
 // Indicate (boolean) if time if greater/less than given time
 bool diffBtwTimePeriod(struct TIME start, struct TIME stop) {
