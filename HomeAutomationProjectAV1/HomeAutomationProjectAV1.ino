@@ -5,34 +5,27 @@
   version - AV 1.0.1
   type - Arduino version
   Updates/ Fixes -
-  > Introduced a new function - kitchen_control for managing the sarita requirement.
-  > bring stability in other functions
+  
 
   Debug instructions -
   1> Always check the active hours for bathroom lighting. Standard time - 6pm to 7am
   2> Check for bathroom light duration in minute. means how long the bulb will glow once turned ON
  *************************************************************/
-
 // For RTC module
 #include "RTClib.h"
 
 // Basic configuration variables
-// moved the variable init from setup to loop() section
-bool isInitialSetupPerformed = false;
-
 // Tell whether LED bulb is On/ Off
 boolean isBathroomLedOn = false;
-boolean isKitchenLedOn = false;
 
 // contain status of motion sensor i.e. 1 if activity detected/ 0 silent
 long motionSensorStatus;
 
 // Bathroom sensor - Active hours
-int activeHourStart = 18;   // 2.00 pm
+int activeHourStart = 18;   // 6.00 pm
 int activeHourEnd = 7;      // 7.00 am
 
 int bathroomLightOnDuration = 2;    // In minutes
-int kitchenLightOnDuration = 1;    // In minutes
 int iAmStillInToilet = 0;
 
 // To maintain the active alarms
@@ -83,7 +76,14 @@ bool windowBulbSwitchState = LOW;
 * This function write data into two places - NodeMCU file system (for offline support) and for google sheet API
 */
 void actionMessageLogger(String message) {
-    Serial.println(message);
+    Serial.println("");
+    Serial.print(currentTime.hour());
+    Serial.print(":");
+    Serial.print(currentTime.minute());
+    Serial.print(":");
+    Serial.print(currentTime.second());
+    Serial.print(" ");
+    Serial.print(message);
 }
 
 // turnBulb("ON", "OutBulb")
@@ -91,7 +91,7 @@ void turnBulb(String action, String bulbLocation) {
     if (bulbLocation == "OutBulb") {
         // Turn ON the bulb by making relay LOW else
         digitalWrite(windowBulbRelay, action == "ON" ? LOW : HIGH);
-        actionMessageLogger(action == "ON" ? "windowBulbRelay :: Turn ON the window bulb" : "windowBulbRelay :: Turn OFF the window bulb");
+        actionMessageLogger(action == "ON" ? "windowBulbRelay :: Turn ON the outside bathroom bulb" : "windowBulbRelay :: Turn OFF the outside bathroom bulb");
     }
 
     if (bulbLocation == "bathroomBulb") {
@@ -100,25 +100,18 @@ void turnBulb(String action, String bulbLocation) {
         digitalWrite(bathroomBulbRelay, action == "ON" ? LOW : HIGH);
         actionMessageLogger(action == "ON" ? "bathroomBulbRelay :: Turn ON the bathroom bulb" : "bathroomBulbRelay :: Turn OFF the bathroom bulb");
     }
-
-    if (bulbLocation == "kitchenBulb") {
-        // Turn ON the bulb by making relay LOW
-        // Turn OFF the bulb by making relay HIGH
-        digitalWrite(windowBulbRelay, action == "ON" ? LOW : HIGH);
-        actionMessageLogger(action == "ON" ? "KitchenBulb :: Turn ON the kitchen bulb" : "KitchenBulb :: Turn OFF the kitchen bulb");
-    }
 }
 
 // For RTC module setup
 void rtcSetup() {
     Serial.println("rtcSetup :: Health status check");
- 
-    if (!rtc.begin()) {
+
+    if (! rtc.begin()) {
         Serial.println("rtcSetup :: Couldn't find RTC");
         Serial.flush();
         while (1) delay(10);
     }
-    
+
     if (! rtc.isrunning()) {
         Serial.println("rtcSetup :: RTC is NOT running, let's set the time!");
         // When time needs to be set on a new device, or after a power loss, the
@@ -138,17 +131,13 @@ void rtcSetup() {
     Serial.print(currentTime.second());
 }
 
-void unsetAlarm(int alarmId) {
-    Serial.println("Removed the alarm");
-    activeAlarm[alarmId].isAlarmSet = 0;
-    // Set this flag so that next time, it can be set again
-    activeAlarm[alarmId].isAlarmTriggered = 1;
-}
 
 // duration = for how long you want to set alarm
 // alarmType = 1 for hour | 2 for Minute
 void setAlarm(int alarmId, int duration, int alarmType) {
-    int temp = 0;
+    int tempHour = 0;
+    int tempMinute = 0;
+
     // Bathroom Timer duration
     activeAlarm[alarmId].alarmId = alarmId;
     activeAlarm[alarmId].alarmType = alarmType;
@@ -159,12 +148,22 @@ void setAlarm(int alarmId, int duration, int alarmType) {
     activeAlarm[alarmId].duration = duration;
 
     // alarmType for Hour
-    temp = currentTime.hour() + duration;
-    activeAlarm[alarmId].endTimeHour = alarmType == 1 ? (temp > 23 ? (temp - 24) : temp) : currentTime.hour();
+    tempHour = currentTime.hour() + duration;
+    activeAlarm[alarmId].endTimeHour = alarmType == 1 ? (tempHour > 23 ? (tempHour - 24) : tempHour) : currentTime.hour();
 
     // alarmType for Minute
-    temp = currentTime.minute() + duration;
-    activeAlarm[alarmId].endTimeMinute = alarmType == 2 ? (temp > 59 ? (temp - 60) : temp) : currentTime.minute();
+    tempMinute = currentTime.minute() + duration;
+    if (alarmType == 2) {
+        if (tempMinute > 59) {
+            activeAlarm[alarmId].endTimeMinute = tempMinute - 60;
+            tempHour = currentTime.hour() + 1;
+            activeAlarm[alarmId].endTimeHour = tempHour > 23 ? (tempHour - 24) : tempHour;
+        } else {
+            activeAlarm[alarmId].endTimeMinute = tempMinute;
+        }
+    } else {
+        activeAlarm[alarmId].endTimeMinute = currentTime.minute();
+    }
 
     activeAlarm[alarmId].endTimeSecond = currentTime.second();
     // alarmId = 0 [bathroom bulb setup] and bulb is not glowing then only setup this
@@ -172,70 +171,20 @@ void setAlarm(int alarmId, int duration, int alarmType) {
         // Turn ON the bulb by making relay LOW
         turnBulb("ON", "bathroomBulb");
         isBathroomLedOn = true;
-        actionMessageLogger("setAlarm :: Turn ON the bulb by making relay LOW");
     }
 
-    // alarmId = 1 [window bulb setup] and bulb is not glowing then only setup this
-    /* Condition - 
-    *   1. Whenever switch is turned ON, the bulb turned ON for 5 minute. So if user want to turn ON the bulb again then he has to turn this ON again.
-    *   2. Work normally when switch is turned OFF. Irrespective of time left, the bulb has to be turned OFF.
-    */
-    if (alarmId == 1) {
-        turnBulb("ON", "kitchenBulb");
-    }
-
-    // actionMessageLogger("setAlarm :: Timer SET Completed");
+    actionMessageLogger("setAlarm :: Timer SET Completed");
 }
 
-void matchAlarm() {
+void matchAlarm(int alarmId) {
     // Match condition
     for (int i=0; i < 2; i++) {
-        if (currentTime.hour() == activeAlarm[i].endTimeHour && currentTime.minute() >= activeAlarm[i].endTimeMinute && currentTime.second() >= activeAlarm[i].endTimeSecond && !activeAlarm[i].isAlarmTriggered) {
+        if (alarmId == activeAlarm[i].alarmId && currentTime.hour() == activeAlarm[i].endTimeHour && currentTime.minute() >= activeAlarm[i].endTimeMinute && currentTime.second() >= activeAlarm[i].endTimeSecond && !activeAlarm[i].isAlarmTriggered) {
             actionMessageLogger("matchAlarm :: Timer Matched - alarm triggered");
             activeAlarm[i].isAlarmSet = 0;
             activeAlarm[i].isAlarmTriggered = 1;
-
-            // Bathroom bulb handler - Check if current time reached the Off Timer and LED still ON
-            if (activeAlarm[i].alarmId == 0 && isBathroomLedOn) {
-                // Check if bttn pressed for long stay
-                if (digitalRead(iAmStillInToiletSwitch) == LOW || iAmStillInToilet) {
-                    // Set the new timer for 1 minute
-                    // int alarmId, int duration, int alarmType
-                    setAlarm(0, bathroomLightOnDuration, 2);
-                } else {
-                    turnBulb("OFF", "bathroomBulb");
-                    // Resetting the flags
-                    isBathroomLedOn = false;
-                }
-            }
-
-            // kitchenBulb handler - Check if current time reached the Off Timer and LED still ON
-            if (activeAlarm[i].alarmId == 1) {
-                turnBulb("OFF", "kitchenBulb");
-            }
         }
     }
-}
-
-void kitchen_control() {
-    // when kitchen switch pressed = ON
-    if (digitalRead(windowBulbSwitch) == LOW && !isKitchenLedOn) {
-        if (activeAlarm[1].isAlarmSet == 0) {
-            Serial.println("button pressed ON, setting alarm");
-            // int alarmId, int duration, int alarmType
-            setAlarm(1, kitchenLightOnDuration, 2);
-            isKitchenLedOn = true;
-        }
-    }
-
-    // when kitchen switch pressed = OFF
-    if (digitalRead(windowBulbSwitch) == HIGH && isKitchenLedOn) {
-        Serial.println("button pressed OFF");
-        unsetAlarm(1);
-        isKitchenLedOn = false;
-        turnBulb("OFF", "kitchenBulb");
-        delay(100);
-    } 
 }
 
 void manual_control() {
@@ -249,13 +198,12 @@ void manual_control() {
         turnBulb("OFF", "OutBulb");
         windowLedRelayState = LOW;
         windowBulbSwitchState = LOW;
+        delay(100);
     }
 
-    kitchen_control();
-
     bathRoomAutomaticControl();
-
-    matchAlarm();
+    // Standard delay of 1/2 second
+    delay(500);
 }
 
 void bathRoomAutomaticControl() {
@@ -271,6 +219,25 @@ void bathRoomAutomaticControl() {
           }
         }
     }
+
+    // Now try to match the alarm
+    matchAlarm(0);
+
+    // Check if current time reached the Off Timer and LED still ON
+    if (activeAlarm[0].isAlarmTriggered == 1 && isBathroomLedOn) {
+        // Check if bttn pressed for long stay
+        if (digitalRead(iAmStillInToiletSwitch) == LOW || iAmStillInToilet) {
+            // Set the new timer for 1 minute
+            // int alarmId, int duration, int alarmType
+            setAlarm(0, bathroomLightOnDuration, 2);
+            actionMessageLogger("bathRoomAutomaticControl :: Set the new timer for 1 minute");
+        } else {
+            turnBulb("OFF", "bathroomBulb");
+            // Resetting the flags
+            isBathroomLedOn = false;
+            actionMessageLogger("bathRoomAutomaticControl :: Timer condition satisfied and turn OFF the bulb");
+        }
+    }
 }
 
 void setup() {
@@ -282,7 +249,7 @@ void setup() {
     pinMode(windowBulbRelay, OUTPUT);
     pinMode(windowBulbSwitch, INPUT_PULLUP);
     pinMode(iAmStillInToiletSwitch, INPUT_PULLUP);
-  
+
     // Inside bathroom setup - make relay as output and sensor asinput
     pinMode(bathroomBulbRelay, OUTPUT);
     pinMode(bathroomMotionSensor, INPUT);
@@ -307,5 +274,5 @@ void loop() {
     currentTime = rtc.now();
 
     // call all manual control i.e. switches, relay
-    kitchen_control();
+    manual_control();
 }

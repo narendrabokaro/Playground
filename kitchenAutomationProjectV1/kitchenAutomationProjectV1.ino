@@ -22,6 +22,7 @@
 // ThreeWire myWire(D4,D5,D2); // IO, SCLK, CE
 ThreeWire myWire(D4,D5,D2);
 RtcDS1302<ThreeWire> Rtc(myWire);
+RtcDateTime currentTime;
 
 // Basic configuration variables
 // Tell whether LED bulb is On/ Off
@@ -31,8 +32,6 @@ boolean isKitchenLedOn = false;
 int nonActiveHourDuration = 5;    // in minute
 int activeHourDuration = 30;    // in minute
 int kitchenLightOnDuration = nonActiveHourDuration;    // In minutes
-
-RtcDateTime currentTime;
 
 // To maintain the active alarms
 struct alarm {
@@ -93,14 +92,6 @@ bool diffBtwTimePeriod(struct TIME start, struct TIME stop) {
 void checkActiveHours() {
     boolean morningActiveHour = diffBtwTimePeriod({currentTime.Hour(), currentTime.Minute()}, morningActiveStartTime) && diffBtwTimePeriod(morningActiveEndTime, {currentTime.Hour(), currentTime.Minute()});
     boolean eveningActiveHour = diffBtwTimePeriod({currentTime.Hour(), currentTime.Minute()}, eveningActiveStartTime) && diffBtwTimePeriod(eveningActiveEndTime, {currentTime.Hour(), currentTime.Minute()});
-    
-    // Debug code - TODO
-    // Morning timing
-    Serial.println(diffBtwTimePeriod({currentTime.Hour(), currentTime.Minute()}, morningActiveStartTime));
-    Serial.println(diffBtwTimePeriod(morningActiveEndTime, {currentTime.Hour(), currentTime.Minute()}));
-    // Evening timing
-    Serial.println(diffBtwTimePeriod({currentTime.Hour(), currentTime.Minute()}, eveningActiveStartTime));
-    Serial.println(diffBtwTimePeriod(eveningActiveEndTime, {currentTime.Hour(), currentTime.Minute()}));
 
     if (morningActiveHour || eveningActiveHour) {
         // Keep the bulb On when its a active hour
