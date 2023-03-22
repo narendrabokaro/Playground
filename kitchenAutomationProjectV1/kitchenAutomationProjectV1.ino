@@ -7,10 +7,10 @@
        need to press the switch OFF and then ON.
     2. Work normally when switch is turned OFF. Irrespective of time left, the bulb has to be turned OFF.
 
-  version - v1.0.1
+  version - av1.0.2
   Updates/ Fixes [status]
-  > [Fixed] Checking current time fall btw two time slot.
-  > [Fixed] - Timer set for 30 minutes, scenario - 11.45 and setting the timer now
+  > Increase the time lighting duration from 30 to 45 minutes
+  > Integrated the thingSpeak server for data logging
 
   Debug instructions -
   1> Always check the active hours for bathroom lighting. Standard time - 6pm to 7am
@@ -18,6 +18,10 @@
  *************************************************************/
 #include <ThreeWire.h>  
 #include <RtcDS1302.h>
+
+// For pattern Analysis
+#include <ESP8266WiFi.h>
+#include "ThingSpeak.h"
 
 // ThreeWire myWire(D4,D5,D2); // IO, SCLK, CE
 ThreeWire myWire(D4,D5,D2);
@@ -30,8 +34,15 @@ boolean isKitchenLedOn = false;
 
 // Change this value Accordlingly
 int nonActiveHourDuration = 5;    // in minute
-int activeHourDuration = 30;    // in minute
+int activeHourDuration = 45;    // in minute
 int kitchenLightOnDuration = nonActiveHourDuration;    // In minutes
+
+// For thingSpeak config
+const char* ssid = "hunter22";
+const char* password = "@Serv1234@";
+WiFiClient  client;
+unsigned long myChannelNumber = 1;
+const char * myWriteAPIKey = "R8M3AJ0PUGBKLWZV";
 
 // To maintain the active alarms
 struct alarm {
@@ -206,6 +217,7 @@ void matchAlarm() {
             // kitchenBulb handler - Check if current time reached the Off Timer and LED still ON
             if (activeAlarm[i].alarmId == 0) {
                 turnBulb("OFF", "kitchenBulb");
+                dataPunch("kitchen-Auto", "OFF");
             }
         }
     }
@@ -219,6 +231,8 @@ void kitchen_control() {
             // int alarmId, int duration, int alarmType
             setAlarm(0, 2);
             isKitchenLedOn = true;
+            // data punch to thingSpeak server
+            dataPunch("kitchen", "ON");
         }
     }
 
@@ -228,6 +242,7 @@ void kitchen_control() {
         unsetAlarm(0);
         isKitchenLedOn = false;
         turnBulb("OFF", "kitchenBulb");
+        dataPunch("kitchen", "OFF");
         delay(100);
     }
 
@@ -244,8 +259,7 @@ void rtcSetup() {
     RtcDateTime compiled = RtcDateTime(__DATE__, __TIME__);
     Serial.println();
 
-    if (!Rtc.IsDateTimeValid()) 
-    {
+    if (!Rtc.IsDateTimeValid()) {
         // Common Causes:
         //    1) first time you ran and the device wasn't running yet
         //    2) the battery on the device is low or even missing
@@ -254,31 +268,54 @@ void rtcSetup() {
         Rtc.SetDateTime(compiled);
     }
 
-    if (Rtc.GetIsWriteProtected())
-    {
+    if (Rtc.GetIsWriteProtected()) {
         Serial.println("RTC was write protected, enabling writing now");
         Rtc.SetIsWriteProtected(false);
     }
 
-    if (!Rtc.GetIsRunning())
-    {
+    if (!Rtc.GetIsRunning()) {
         Serial.println("RTC was not actively running, starting now");
         Rtc.SetIsRunning(true);
     }
 
     RtcDateTime now = Rtc.GetDateTime();
-    if (now < compiled) 
-    {
+    if (now < compiled) {
         Serial.println("RTC is older than compile time!  (Updating DateTime)");
         Rtc.SetDateTime(compiled);
-    }
-    else if (now > compiled) 
-    {
+    } else if (now > compiled) {
         Serial.println("RTC is newer than compile time. (this is expected)");
-    }
-    else if (now == compiled) 
-    {
+    } else if (now == compiled) {
         Serial.println("RTC is the same as compile time! (not expected but all is fine)");
+    }
+}
+
+void dataPunch(String switchLocation, String pressedStatus) {
+    // First check the connection
+    wifiConnectionCheck();
+    // set the fields with the values
+    ThingSpeak.setField(1, "Kitchen");
+    ThingSpeak.setField(2, pressedStatus);
+
+    // Write to ThingSpeak. There are up to 8 fields in a channel, allowing you to store up to 8 different
+    // pieces of information in a channel.  Here, we write to field 1.
+    int x = ThingSpeak.writeFields(myChannelNumber, myWriteAPIKey);
+
+    if (x == 200) {
+      Serial.println("Channel update successful.");
+    } else {
+      Serial.println("Problem updating channel. HTTP error code " + String(x));
+    }
+}
+
+void wifiConnectionCheck() {
+    // Connect or reconnect to WiFi
+    if(WiFi.status() != WL_CONNECTED){
+      Serial.print("Attempting to connect");
+      while(WiFi.status() != WL_CONNECTED){
+        WiFi.begin(ssid, password);
+        delay(5000);
+      }
+      Serial.println("\nConnected.");
     }
 }
 
@@ -286,8 +323,11 @@ void setup() {
     
     // Debug console
     Serial.begin(57600);
-    // Serial.begin(9600);
+    WiFi.mode(WIFI_STA);
+
+    ThingSpeak.begin(client);  // Initialize ThingSpeak
     delay(500);
+    wifiConnectionCheck();
 
     // Initial setup
     pinMode(kitchBulbRelay, OUTPUT);
