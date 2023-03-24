@@ -14,20 +14,11 @@
 // For RTC module
 #include "RTClib.h"
 
+// On arduino > connected to I2C pins (above ARFT)
+RTC_DS1307 rtc;
+DateTime currentTime;
+
 // Basic configuration variables
-// Tell whether LED bulb is On/ Off
-boolean isBathroomLedOn = false;
-
-// contain status of motion sensor i.e. 1 if activity detected/ 0 silent
-long motionSensorStatus;
-
-// Bathroom sensor - Active hours
-int activeHourStart = 18;   // 6.00 pm
-int activeHourEnd = 7;      // 7.00 am
-
-int bathroomLightOnDuration = 2;    // In minutes
-int iAmStillInToilet = 0;
-
 // To maintain the active alarms
 struct alarm {
     int alarmId;
@@ -44,6 +35,12 @@ struct alarm {
     int endTimeSecond;
 };
 
+// Time for various comparision
+struct Time {
+    int hours;
+    int minutes;
+};
+
 // Created this struct to maintain more than one alarms i.e. one for bathroom and another for bedroom bulb
 // 0 - bathroom timer
 // 1 - bedroom timer
@@ -53,7 +50,6 @@ struct alarm activeAlarm[2];
 /* ------------------------------ */
 // Sensors/ Relay connection details with GPIOs pins
 // D1 and D2 allotted to RTC module DS1307
-
 #define windowBulbRelay 2
 #define bathroomMotionSensor 3
 #define bathroomBulbRelay 4
@@ -61,16 +57,44 @@ struct alarm activeAlarm[2];
 #define windowBulbSwitch 5
 #define iAmStillInToiletSwitch 6
 
-// RTC Module
-// On arduino > connected to I2C pins (above ARFT)
-RTC_DS1307 rtc;
-DateTime currentTime;
+// Tell whether LED bulb is On/ Off
+boolean isBathroomLedOn = false;
+
+// contain status of motion sensor i.e. 1 if activity detected/ 0 silent
+long motionSensorStatus;
+int bathroomLightOnDuration = 2;    // In minutes
+int iAmStillInToilet = 0;
 
 // Window Led Relay State
 bool windowLedRelayState = LOW; 
 
 // Switch State - ON (HIGH)/ OFF (LOW)
 bool windowBulbSwitchState = LOW;
+bool isActiveHour = false;
+
+// Bathroom Active hours - Evening 6 PM to Morning 7 AM
+struct Time activeHourStartTime1 = {18, 30};    // 6.30 PM to 11.58 PM
+struct Time activeHourEndTime1 = {23, 58};
+struct Time activeHourStartTime2 = {0, 10};    // 00.10 AM to 7.00 AM
+struct Time activeHourEndTime2 = {7, 0};
+
+// Indicate (boolean) if time if greater/less than given time
+bool diffBtwTimePeriod(struct Time start, struct Time end) {
+   while (end.minutes > start.minutes) {
+      --start.hours;
+      start.minutes += 60;
+   }
+
+   return (start.hours - end.hours) >= 0;
+}
+
+// Set light ON duration in case time fall btw active hours
+bool checkActiveHours() {
+    boolean morningActiveHour = diffBtwTimePeriod({currentTime.hour(), currentTime.minute()}, activeHourStartTime1) && diffBtwTimePeriod(activeHourEndTime1, {currentTime.hour(), currentTime.minute()});
+    boolean eveningActiveHour = diffBtwTimePeriod({currentTime.hour(), currentTime.minute()}, activeHourStartTime2) && diffBtwTimePeriod(activeHourEndTime2, {currentTime.hour(), currentTime.minute()});
+
+    return (morningActiveHour || eveningActiveHour);
+}
 
 /*
 * This function write data into two places - NodeMCU file system (for offline support) and for google sheet API
@@ -202,13 +226,11 @@ void manual_control() {
     }
 
     bathRoomAutomaticControl();
-    // Standard delay of 1/2 second
-    delay(500);
 }
 
 void bathRoomAutomaticControl() {
     // Bathroom Lighting hours starts from - 6 pm (18:00) till 7 am (07:00)
-    if (currentTime.hour() >= activeHourStart || currentTime.hour() <= activeHourEnd) {
+    if (checkActiveHours()) {
         motionSensorStatus = digitalRead(bathroomMotionSensor);
         // activities detected
         if (motionSensorStatus == HIGH) {
@@ -275,4 +297,9 @@ void loop() {
 
     // call all manual control i.e. switches, relay
     manual_control();
+
+    // Standard delay of 1/2 second
+    delay(500);
+    // Checking the active hour
+    checkActiveHours();
 }
