@@ -7,21 +7,19 @@
        need to press the switch OFF and then ON.
     2. Work normally when switch is turned OFF. Irrespective of time left, the bulb has to be turned OFF.
 
-  version - av1.0.2
+  version - 1.0.3
   Updates/ Fixes [status]
-  > Increase the time lighting duration from 30 to 45 minutes
-  > Integrated the thingSpeak server for data logging
+  > Integrated flash file read/ write activities  
+  > Remove the thingSpeak server for data logging
 
   Debug instructions -
   1> Always check the active hours for bathroom lighting. Standard time - 6pm to 7am
   2> Check for bathroom light duration in minute. means how long the bulb will glow once turned ON
  *************************************************************/
+#include <FS.h>
+#include <string.h>
 #include <ThreeWire.h>  
 #include <RtcDS1302.h>
-
-// For pattern Analysis
-#include <ESP8266WiFi.h>
-#include "ThingSpeak.h"
 
 // ThreeWire myWire(D4,D5,D2); // IO, SCLK, CE
 ThreeWire myWire(D4,D5,D2);
@@ -29,20 +27,15 @@ RtcDS1302<ThreeWire> Rtc(myWire);
 RtcDateTime currentTime;
 
 // Basic configuration variables
+char datestring[20];
 // Tell whether LED bulb is On/ Off
 boolean isKitchenLedOn = false;
-
+// Data logger file name
+String fileName = "/logdata.txt";
 // Change this value Accordlingly
 int nonActiveHourDuration = 5;    // in minute
 int activeHourDuration = 45;    // in minute
 int kitchenLightOnDuration = nonActiveHourDuration;    // In minutes
-
-// For thingSpeak config
-const char* ssid = "hunter22";
-const char* password = "@Serv1234@";
-WiFiClient  client;
-unsigned long myChannelNumber = 1;
-const char * myWriteAPIKey = "R8M3AJ0PUGBKLWZV";
 
 // To maintain the active alarms
 struct alarm {
@@ -83,6 +76,7 @@ Active Time frame between - 6AM to 7AM and 6PM to 9PM
        need to press the switch OFF and then ON.
     2. Work normally when switch is turned OFF. Irrespective of time left, the bulb has to be turned OFF.
 */
+
 // Active hours
 struct TIME morningActiveStartTime = {6, 0};    // 6.00AM to 7.00AM
 struct TIME morningActiveEndTime = {7, 0};
@@ -107,22 +101,16 @@ void checkActiveHours() {
     if (morningActiveHour || eveningActiveHour) {
         // Keep the bulb On when its a active hour
         kitchenLightOnDuration = activeHourDuration;
-        Serial.println("duration : ");
-        Serial.print(activeHourDuration);
     } else {
         // Default light duration
         kitchenLightOnDuration = nonActiveHourDuration;
-        Serial.println("duration : ");
-        Serial.print(nonActiveHourDuration);
     }
 }
 
 void printDateTime(const RtcDateTime& dt) {
-    char datestring[20];
-
     snprintf_P(datestring, 
             countof(datestring),
-            PSTR("%02u/%02u/%04u %02u:%02u:%02u"),
+            PSTR("%02u/%02u/%04u:%02u.%02u.%02u:"),
             dt.Month(),
             dt.Day(),
             dt.Year(),
@@ -130,6 +118,85 @@ void printDateTime(const RtcDateTime& dt) {
             dt.Minute(),
             dt.Second() );
     Serial.print(datestring);
+}
+
+// Log the data into the file
+void writeFile(char msg[20]) {
+    File file = SPIFFS.open(fileName, "a");
+
+    if (!file) {
+      Serial.println("Error opening file for writing");
+      return;
+    }
+
+    // Format the string
+    char printString[50];
+    printDateTime(currentTime);
+    strcat(printString, datestring);
+    strcat(printString, msg);
+    // Serial.print(printString);
+
+    int bytesWritten = file.print(printString);
+
+    if (bytesWritten == 0) {
+      Serial.println("File write failed");
+      return;
+    }
+  
+    file.close(); 
+}
+
+// Create a empty file with headers
+void createFile() {
+    File file = SPIFFS.open(fileName, "w");
+
+    if (!file) {
+      Serial.println("Error opening file for writing");
+      return;
+    }
+
+    int bytesWritten = file.print("Date:Time:Location:Status\n");
+
+    if (bytesWritten == 0) {
+      Serial.println("File write failed");
+      return;
+    }
+
+    file.close();
+}
+
+// Read the specified file
+void readFile() {
+    File file = SPIFFS.open(fileName, "r");
+
+    if (!file) {
+      Serial.println("Failed to open file for reading");
+      return;
+    }
+
+    while (file.available()) {
+      Serial.write(file.read());
+    }
+
+    file.close();
+}
+
+void fileSystemMount() {
+    bool success = SPIFFS.begin();
+
+    if (!success) {
+      Serial.println("Error mounting the file system");
+      return;
+    }
+
+    // If file not exists then create it first
+    if (!SPIFFS.exists(fileName)) {
+        Serial.println("Preparing a fresh file to write.");
+        createFile();
+    } else {
+        Serial.print("Good, file exist .. lets read the file data");
+        readFile();
+    }
 }
 
 /*
@@ -217,7 +284,8 @@ void matchAlarm() {
             // kitchenBulb handler - Check if current time reached the Off Timer and LED still ON
             if (activeAlarm[i].alarmId == 0) {
                 turnBulb("OFF", "kitchenBulb");
-                dataPunch("kitchen-Auto", "OFF");
+                char msgString[] = "kit-Auto:OFF\n";
+                writeFile(msgString);
             }
         }
     }
@@ -231,8 +299,8 @@ void kitchen_control() {
             // int alarmId, int duration, int alarmType
             setAlarm(0, 2);
             isKitchenLedOn = true;
-            // data punch to thingSpeak server
-            dataPunch("kitchen", "ON");
+            char msgString[] = "kitchen:ON\n";
+            writeFile(msgString);
         }
     }
 
@@ -242,7 +310,8 @@ void kitchen_control() {
         unsetAlarm(0);
         isKitchenLedOn = false;
         turnBulb("OFF", "kitchenBulb");
-        dataPunch("kitchen", "OFF");
+        char msgString[] = "kitchen:OFF\n";
+        writeFile(msgString);
         delay(100);
     }
 
@@ -289,45 +358,9 @@ void rtcSetup() {
     }
 }
 
-void dataPunch(String switchLocation, String pressedStatus) {
-    // First check the connection
-    wifiConnectionCheck();
-    // set the fields with the values
-    ThingSpeak.setField(1, "Kitchen");
-    ThingSpeak.setField(2, pressedStatus);
-
-    // Write to ThingSpeak. There are up to 8 fields in a channel, allowing you to store up to 8 different
-    // pieces of information in a channel.  Here, we write to field 1.
-    int x = ThingSpeak.writeFields(myChannelNumber, myWriteAPIKey);
-
-    if (x == 200) {
-      Serial.println("Channel update successful.");
-    } else {
-      Serial.println("Problem updating channel. HTTP error code " + String(x));
-    }
-}
-
-void wifiConnectionCheck() {
-    // Connect or reconnect to WiFi
-    if(WiFi.status() != WL_CONNECTED){
-      Serial.print("Attempting to connect");
-      while(WiFi.status() != WL_CONNECTED){
-        WiFi.begin(ssid, password);
-        delay(5000);
-      }
-      Serial.println("\nConnected.");
-    }
-}
-
 void setup() {
-    
     // Debug console
     Serial.begin(57600);
-    WiFi.mode(WIFI_STA);
-
-    ThingSpeak.begin(client);  // Initialize ThingSpeak
-    delay(500);
-    wifiConnectionCheck();
 
     // Initial setup
     pinMode(kitchBulbRelay, OUTPUT);
@@ -335,6 +368,8 @@ void setup() {
 
     // Setup the RTC mmodule
     rtcSetup();
+    // File system mount process
+    fileSystemMount();
     Serial.println("Setup :: Setup completed");
 }
 
