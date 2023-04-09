@@ -23,9 +23,13 @@ struct Time {
     int minutes;
 };
 
-// Garden Active hours - Morning 10.10 AM to 11.25 AM
+// Describe the time for which motor run and water the plant (In Seconds)
+int motorRunningTime = 8000;
+#define motorRelay D5;
+
+// Garden Active hours - Morning 10.10 AM to 11.10 AM
 struct Time activeHourStartTime = {10, 10};
-struct Time activeHourEndTime = {11, 25};
+struct Time activeHourEndTime = {11, 10};
 
 // Indicate (boolean) if time if greater/less than given time
 bool diffBtwTimePeriod(struct Time start, struct Time end) {
@@ -39,36 +43,18 @@ bool diffBtwTimePeriod(struct Time start, struct Time end) {
 
 // Set light ON duration in case time fall btw active hours
 bool isActiveHours() {
-    boolean morningActiveHour = diffBtwTimePeriod({currentTime.hour(), currentTime.minute()}, activeHourStartTime) && diffBtwTimePeriod(activeHourEndTime, {currentTime.hour(), currentTime.minute()});
-
-    return morningActiveHour;
+    return diffBtwTimePeriod({currentTime.hour(), currentTime.minute()}, activeHourStartTime) && diffBtwTimePeriod(activeHourEndTime, {currentTime.hour(), currentTime.minute()});
 }
 
 void lookNPlantWater() {
-    Serial.print("Inside lookNPlantWater:: ");
     // Active hours starts from 8.10 am to 9.10 am
     if (isActiveHours()) {
         Serial.print("Running the pump");
         // Run the motor - Make relay high
-        digitalWrite(D3, HIGH);
-        delay(1000);
-        digitalWrite(D3, LOW);
-        delay(1000);
-
-        digitalWrite(D3, HIGH);
-        delay(1000);
-        digitalWrite(D3, LOW);
-        delay(1000);
-
-        digitalWrite(D3, HIGH);
-        delay(1000);
-        digitalWrite(D3, LOW);
-        delay(1000);
-
         // Turn the motor ON for 1 minute
-        digitalWrite(D5, HIGH);
-        delay(60000);
-        digitalWrite(D5, LOW);
+        digitalWrite(motorRelay, HIGH);
+        delay(motorRunningTime);
+        digitalWrite(motorRelay, LOW);
         delay(1000);
     }
 }
@@ -85,10 +71,11 @@ void rtcSetup() {
     }
 
     if (! rtc.isrunning()) {
-        Serial.println("rtcSetup :: RTC is NOT running, let's set the time!");
+        Serial.println("rtcSetup :: RTC is NOT running, Please uncomment below lines to set the time!");
         // When time needs to be set on a new device, or after a power loss, the
         // following line sets the RTC to the date & time this sketch was compiled
-        rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+        //rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+        
         // This line sets the RTC with an explicit date & time, for example to set
         // January 21, 2014 at 3am you would call:
         // rtc.adjust(DateTime(2014, 1, 21, 3, 0, 0));
@@ -105,8 +92,7 @@ void rtcSetup() {
 
 void setup() {
   Serial.begin(115200);
-  pinMode(D3, OUTPUT);
-  pinMode(D5, OUTPUT);
+  pinMode(motorRelay, OUTPUT);
 
   // Setup the RTC mmodule
   rtcSetup();
@@ -117,6 +103,8 @@ void setup() {
 
   // Deep sleep mode for 30 seconds, the ESP8266 wakes up by itself when GPIO 16 (D0 in NodeMCU board) is connected to the RESET pin
   Serial.println("I'm awake, but I'm going into deep sleep mode for 1 hour");
+  // Deep sleep time - 3600 Second ~ 1 Hour
+  // ESP.deepSleep(120e6);
   ESP.deepSleep(3600e6);
 }
 
