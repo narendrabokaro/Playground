@@ -7,10 +7,12 @@
        need to press the switch OFF and then ON.
     2. Work normally when switch is turned OFF. Irrespective of time left, the bulb has to be turned OFF.
 
-  version - 1.0.3
+  version - 1.0.4
   Updates/ Fixes [status]
   > Integrated flash file read/ write activities  
-  > Remove the thingSpeak server for data logging
+  > Updated the thingSpeak server for data logging only during fixed time, and rest of times, pressing switch will write data in file.
+  > During handShake period, it will read yesterdayFile line by line and then write them on thingSpeak server.
+  > And delete the yesterdayFile after successful completion of data writting.
 
   Debug instructions -
   1> Always check the active hours for bathroom lighting. Standard time - 6pm to 7am
@@ -20,6 +22,9 @@
 #include <string.h>
 #include <ThreeWire.h>  
 #include <RtcDS1302.h>
+// For pattern Analysis
+#include <ESP8266WiFi.h>
+#include "ThingSpeak.h"
 
 // ThreeWire myWire(D4,D5,D2); // IO, SCLK, CE
 ThreeWire myWire(D4,D5,D2);
@@ -31,11 +36,22 @@ char datestring[20];
 // Tell whether LED bulb is On/ Off
 boolean isKitchenLedOn = false;
 // Data logger file name
-String fileName = "/logdata.txt";
+String fileName = "/todayLogData.txt";
 // Change this value Accordlingly
 int nonActiveHourDuration = 5;    // in minute
 int activeHourDuration = 45;    // in minute
 int kitchenLightOnDuration = nonActiveHourDuration;    // In minutes
+
+// For thingSpeak config
+const char* ssid = "hunter22";
+const char* password = "@Serv1234@";
+WiFiClient  client;
+unsigned long myChannelNumber = 1;
+const char * myWriteAPIKey = "R8M3AJ0PUGBKLWZV";
+
+// Try to reconnect after every minute
+const unsigned long connCheckTimeOut = 4*60000; // 5 min
+unsigned long lastConnCheckTime;
 
 // To maintain the active alarms
 struct alarm {
@@ -53,7 +69,7 @@ struct alarm {
 };
 
 // Time for various comparision
-struct TIME {
+struct Time {
     int hours;
     int minutes;
 };
@@ -78,13 +94,19 @@ Active Time frame between - 6AM to 7AM and 6PM to 9PM
 */
 
 // Active hours
-struct TIME morningActiveStartTime = {6, 0};    // 6.00AM to 7.00AM
-struct TIME morningActiveEndTime = {7, 0};
-struct TIME eveningActiveStartTime = {18, 0};   // 6.00PM to 10.00PM 
-struct TIME eveningActiveEndTime = {22, 0};
+struct Time morningActiveStartTime = {6, 0};    // 6.00AM to 7.00AM
+struct Time morningActiveEndTime = {7, 0};
+struct Time eveningActiveStartTime = {18, 0};   // 6.00PM to 10.00PM 
+struct Time eveningActiveEndTime = {22, 0};
+
+// Data transfer hours
+struct Time morningDataTransferStartTime = {8, 30};    // 8.30 AM to 8.45 AM
+struct Time morningDataTransferEndTime = {8, 45};
+struct Time eveningDataTransferStartTime = {20, 0};   // 8.00 AM to 8.15 AM
+struct Time eveningDataTransferEndTime = {20, 15};
 
 // Indicate (boolean) if time if greater/less than given time
-bool diffBtwTimePeriod(struct TIME start, struct TIME stop) {
+bool diffBtwTimePeriod(struct Time start, struct Time stop) {
    while (stop.minutes > start.minutes) {
       --start.hours;
       start.minutes += 60;
@@ -120,8 +142,17 @@ void printDateTime(const RtcDateTime& dt) {
     Serial.print(datestring);
 }
 
+bool isToday() {
+    return false;
+}
+
 // Log the data into the file
 void writeFile(char msg[20]) {
+
+    if (!isToday()) {
+        fileName = "/yesterdayLogData.txt";
+    }
+
     File file = SPIFFS.open(fileName, "a");
 
     if (!file) {
@@ -163,6 +194,10 @@ void createFile() {
     }
 
     file.close();
+}
+
+void deleteYesterdayFile() {
+    SPIFFS.remove(fileName);
 }
 
 // Read the specified file
@@ -259,8 +294,6 @@ void setAlarm(int alarmId, int alarmType) {
     } else {
         activeAlarm[alarmId].endTimeMinute = currentTime.Minute();
     }
-
-    // activeAlarm[alarmId].endTimeMinute = alarmType == 2 ? (temp > 59 ? (temp - 60) : temp) : currentTime.Minute();
 
     activeAlarm[alarmId].endTimeSecond = currentTime.Second();
     // alarmId = 1 [window bulb setup] and bulb is not glowing then only setup this
@@ -361,6 +394,8 @@ void rtcSetup() {
 void setup() {
     // Debug console
     Serial.begin(57600);
+    WiFi.mode(WIFI_STA);
+    ThingSpeak.begin(client);  // Initialize ThingSpeak
 
     // Initial setup
     pinMode(kitchBulbRelay, OUTPUT);
@@ -373,19 +408,96 @@ void setup() {
     Serial.println("Setup :: Setup completed");
 }
 
+bool checkDataTransferHours() {
+    boolean morningHour = diffBtwTimePeriod({currentTime.Hour(), currentTime.Minute()}, morningDataTransferStartTime) && diffBtwTimePeriod(morningDataTransferEndTime, {currentTime.Hour(), currentTime.Minute()});
+    boolean eveningHour = diffBtwTimePeriod({currentTime.Hour(), currentTime.Minute()}, eveningDataTransferStartTime) && diffBtwTimePeriod(eveningDataTransferEndTime, {currentTime.Hour(), currentTime.Minute()});
+
+    if (morningHour || eveningHour) {
+        return true;
+    }
+
+    return false;
+}
+
+bool startHandShake() {
+    bool isFileReadComplete = false;
+    // Open the file as read mode
+    File file = SPIFFS.open(fileName, "r");
+
+    if (!file) {
+      Serial.println("Failed to open file for reading");
+      return false;
+    }
+
+    while (file.available()) {
+      // Resetting the flag
+      isFileReadComplete = false;
+
+      Serial.write(file.read());
+
+      // Start data transfer to thingspeak
+      // set the fields with the values
+      ThingSpeak.setField(1, file.read());
+
+      int x = ThingSpeak.writeFields(myChannelNumber, myWriteAPIKey);
+
+      if (x == 200) {
+        Serial.println("Channel update successful.");
+        isFileReadComplete = true;
+      } else {
+        Serial.println("Problem updating channel. HTTP error code " + String(x));
+      }
+    }
+
+    // Lastly close the file
+    file.close();
+
+    return isFileReadComplete;
+}
+
+void checkConnection() {
+    unsigned long timeout = millis();
+    Serial.println("Checking for internet connection...");
+
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("No internet connection found, reconnecting for 10 seconds ");
+        WiFi.begin(ssid, password);
+        
+        while (WiFi.status() != WL_CONNECTED && millis() - timeout < 10000) {
+            delay(500);
+            Serial.print(".");
+        }
+    } else {
+        Serial.println("Active internet connection found");
+        // Start the data transfer to thingspeak server
+        if (startHandShake()) {
+            // When all data transfered succesfully, then delete yesterday file
+            deleteYesterdayFile();
+        }
+    }
+}
+
 void loop() {
+    unsigned long now = millis();
     currentTime = Rtc.GetDateTime();
 
-    if (!currentTime.IsValid())
-    {
+    if (!currentTime.IsValid()) {
         // Common Causes:
         //    1) the battery on the device is low or even missing and the power line was disconnected
         Serial.println("RTC lost confidence in the DateTime!");
     }
 
-    // Serial.println("currentTime");
     // call all manual control i.e. switches, relay
     kitchen_control();
+
+    // Now look for time (8.30 pm or 8.00 pm) and keep looking for internet for another 5 min by keeping break of 30 second
+    if (checkDataTransferHours()) {
+        // Check internet connection after every 5 minute 
+        if (now - lastConnCheckTime >= connCheckTimeOut) {
+            lastConnCheckTime = now;
+            checkConnection();
+        }
+    }
 
     delay(1000);
 }
