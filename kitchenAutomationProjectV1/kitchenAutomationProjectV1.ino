@@ -7,10 +7,9 @@
        need to press the switch OFF and then ON.
     2. Work normally when switch is turned OFF. Irrespective of time left, the bulb has to be turned OFF.
 
-  version - 1.0.3
+  version - 2.0.0
   Updates/ Fixes [status]
-  > Integrated flash file read/ write activities  
-  > Remove the thingSpeak server for data logging
+  > Including motion sensor to catch the activities before closing the light, if found then increase the time
 
   Debug instructions -
   1> Always check the active hours for bathroom lighting. Standard time - 6pm to 7am
@@ -53,14 +52,14 @@ struct alarm {
 };
 
 // Time for various comparision
-struct TIME {
+struct Time {
     int hours;
     int minutes;
 };
 
 // Created this struct to maintain more than one alarms i.e. one for kitchen bulb
 // 0 - kitchen timer
-struct alarm activeAlarm[1];
+struct alarm activeAlarm[2];
 
 /* GPIO Pin configuration details */
 /* ------------------------------ */
@@ -78,13 +77,13 @@ Active Time frame between - 6AM to 7AM and 6PM to 9PM
 */
 
 // Active hours
-struct TIME morningActiveStartTime = {6, 0};    // 6.00AM to 7.00AM
-struct TIME morningActiveEndTime = {7, 0};
-struct TIME eveningActiveStartTime = {18, 0};   // 6.00PM to 10.00PM 
-struct TIME eveningActiveEndTime = {22, 0};
+struct Time morningActiveStartTime = {6, 0};    // 6.00AM to 7.00AM
+struct Time morningActiveEndTime = {7, 0};
+struct Time eveningActiveStartTime = {18, 0};   // 6.00PM to 10.00PM 
+struct Time eveningActiveEndTime = {22, 0};
 
 // Indicate (boolean) if time if greater/less than given time
-bool diffBtwTimePeriod(struct TIME start, struct TIME stop) {
+bool diffBtwTimePeriod(struct Time start, struct Time stop) {
    while (stop.minutes > start.minutes) {
       --start.hours;
       start.minutes += 60;
@@ -134,7 +133,6 @@ void writeFile(char msg[20]) {
     printDateTime(currentTime);
     strcat(printString, datestring);
     strcat(printString, msg);
-    // Serial.print(printString);
 
     int bytesWritten = file.print(printString);
 
@@ -142,7 +140,7 @@ void writeFile(char msg[20]) {
       Serial.println("File write failed");
       return;
     }
-  
+
     file.close(); 
 }
 
@@ -224,15 +222,16 @@ void unsetAlarm(int alarmId) {
     activeAlarm[alarmId].isAlarmTriggered = 1;
 }
 
-// duration = for how long you want to set alarm
-// alarmType = 1 for hour | 2 for Minute
-void setAlarm(int alarmId, int alarmType) {
-    checkActiveHours();
-
+/*
+  Description - Set the alarm
+  alarmId Unique ID for each alarm
+  alarmType [1 for Hour | 2 for Minute]
+  duration Duration of alarm (i.e. For how long you want to set alarm)
+*/
+void setAlarm(int alarmId, int alarmType, int duration) {
     int tempMinute = 0;
     int tempHour = 0;
 
-    int duration = kitchenLightOnDuration;
     // Bathroom Timer duration
     activeAlarm[alarmId].alarmId = alarmId;
     activeAlarm[alarmId].alarmType = alarmType;
@@ -260,22 +259,15 @@ void setAlarm(int alarmId, int alarmType) {
         activeAlarm[alarmId].endTimeMinute = currentTime.Minute();
     }
 
-    // activeAlarm[alarmId].endTimeMinute = alarmType == 2 ? (temp > 59 ? (temp - 60) : temp) : currentTime.Minute();
-
     activeAlarm[alarmId].endTimeSecond = currentTime.Second();
-    // alarmId = 1 [window bulb setup] and bulb is not glowing then only setup this
-    /* Condition - 
-    *   1. Whenever switch is turned ON, the bulb turned ON for 5 minute. So if user want to turn ON the bulb again then he has to turn this ON again.
-    *   2. Work normally when switch is turned OFF. Irrespective of time left, the bulb has to be turned OFF.
-    */
-    if (alarmId == 0) {
-        turnBulb("ON", "kitchenBulb");
-    }
 }
 
 void matchAlarm() {
     // Match condition
     for (int i=0; i < 2; i++) {
+        // Look for motion 5 min before alarm triggered.
+        struct Time lookUpTime = {6, 0};
+
         if (currentTime.Hour() == activeAlarm[i].endTimeHour && currentTime.Minute() >= activeAlarm[i].endTimeMinute && currentTime.Second() >= activeAlarm[i].endTimeSecond && !activeAlarm[i].isAlarmTriggered) {
             actionMessageLogger("matchAlarm :: Timer Matched - alarm triggered");
             activeAlarm[i].isAlarmSet = 0;
@@ -283,7 +275,9 @@ void matchAlarm() {
 
             // kitchenBulb handler - Check if current time reached the Off Timer and LED still ON
             if (activeAlarm[i].alarmId == 0) {
+                // Turn OFF the kitchen bulb
                 turnBulb("OFF", "kitchenBulb");
+                // Writting the file
                 char msgString[] = "kit-Auto:OFF\n";
                 writeFile(msgString);
             }
@@ -296,10 +290,17 @@ void kitchen_control() {
     if (digitalRead(kitchenBulbSwitch) == LOW && !isKitchenLedOn) {
         if (activeAlarm[0].isAlarmSet == 0) {
             Serial.println("button pressed ON, setting alarm");
-            // int alarmId, int duration, int alarmType
-            setAlarm(0, 2);
+            // Check the active hours
+            checkActiveHours();
+            // alarmId, alarmType, duration,
+            setAlarm(0, 2, kitchenLightOnDuration);
+            // Turn On the kitchen bulb
+            turnBulb("ON", "kitchenBulb");
+            // Set the flag true
             isKitchenLedOn = true;
+            // Prepare the string for file writting
             char msgString[] = "kitchen:ON\n";
+            // File writting activities
             writeFile(msgString);
         }
     }
@@ -376,14 +377,12 @@ void setup() {
 void loop() {
     currentTime = Rtc.GetDateTime();
 
-    if (!currentTime.IsValid())
-    {
+    if (!currentTime.IsValid()) {
         // Common Causes:
         //    1) the battery on the device is low or even missing and the power line was disconnected
         Serial.println("RTC lost confidence in the DateTime!");
     }
 
-    // Serial.println("currentTime");
     // call all manual control i.e. switches, relay
     kitchen_control();
 
