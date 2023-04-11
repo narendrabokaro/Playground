@@ -2,10 +2,12 @@
   Filename - nodeIrrigationProject
   Description - Home garden watering system which turn ON daily once and water the plant. To conserve the Battery, it will go to deep sleep after evrey one hour. And during wake up
   time, it will check the clock and if its matches then it will water the plant and go for deep sleep.
-  SPECIAL INSTRUCTION - Pin D0 connected to RST pin in order to perform Deep Sleep -> wake up operation
-  version - 1.0.0
+  SPECIAL INSTRUCTION - Pin D0 connected to RST pin in order to perform Deep Sleep -> wake up operation [Remove this while programing the MCU]
+  version - 1.0.1
   type - Node version
   Updates/ Fixes -
+  Added a buzzer which beeps just before pump starts
+  Changed the motor running duration for 45 seconds
   
   Debug instructions -
   1> Always check the active hours.
@@ -17,15 +19,18 @@
 RTC_DS1307 rtc;
 DateTime currentTime;
 // D1 and D2 allotted to RTC module DS1307
+#define buzzerPin D3
+#define motorRelay D5
+
 // Time for various comparision
 struct Time {
     int hours;
     int minutes;
 };
 
-// Describe the time for which motor run and water the plant (In Seconds)
-int motorRunningTime = 8000;
-#define motorRelay D5;
+// Describe the time for which motor run and water the plant (In Seconds) - 45 Seconds
+unsigned int motorRunningTime = 45000;
+
 
 // Garden Active hours - Morning 10.10 AM to 11.10 AM
 struct Time activeHourStartTime = {10, 10};
@@ -50,6 +55,12 @@ void lookNPlantWater() {
     // Active hours starts from 8.10 am to 9.10 am
     if (isActiveHours()) {
         Serial.print("Running the pump");
+        // Make the one short beep
+        digitalWrite(buzzerPin, HIGH);
+        delay(500);
+        digitalWrite(buzzerPin, LOW);
+        delay(500);
+
         // Run the motor - Make relay high
         // Turn the motor ON for 1 minute
         digitalWrite(motorRelay, HIGH);
@@ -93,6 +104,7 @@ void rtcSetup() {
 void setup() {
   Serial.begin(115200);
   pinMode(motorRelay, OUTPUT);
+  pinMode(buzzerPin, OUTPUT);
 
   // Setup the RTC mmodule
   rtcSetup();
