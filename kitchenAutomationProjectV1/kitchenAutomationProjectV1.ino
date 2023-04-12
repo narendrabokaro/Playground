@@ -20,6 +20,12 @@
 #include <ThreeWire.h>  
 #include <RtcDS1302.h>
 
+// GPIO Pin configuration details
+// ------------------------------
+#define kitchenMotionSensor D0
+#define kitchBulbRelay D1
+#define kitchenBulbSwitch D6
+
 // ThreeWire myWire(D4,D5,D2); // IO, SCLK, CE
 ThreeWire myWire(D4,D5,D2);
 RtcDS1302<ThreeWire> Rtc(myWire);
@@ -29,12 +35,16 @@ RtcDateTime currentTime;
 char datestring[20];
 // Tell whether LED bulb is On/ Off
 boolean isKitchenLedOn = false;
+long motionSensorStatus;
 // Data logger file name
 String fileName = "/logdata.txt";
 // Change this value Accordlingly
 int nonActiveHourDuration = 5;    // in minute
 int activeHourDuration = 45;    // in minute
 int kitchenLightOnDuration = nonActiveHourDuration;    // In minutes
+
+// Check whether motion detected before closing the light and then we extend the alarm by 3 minute
+bool isAlarmUpdated = false;
 
 // To maintain the active alarms
 struct alarm {
@@ -60,13 +70,6 @@ struct Time {
 // Created this struct to maintain more than one alarms i.e. one for kitchen bulb
 // 0 - kitchen timer
 struct alarm activeAlarm[2];
-
-/* GPIO Pin configuration details */
-/* ------------------------------ */
-// Sensors/ Relay connection details with GPIOs pins
-// D2, D4 and D5 allotted to RTC module DS1302
-#define kitchBulbRelay D1
-#define kitchenBulbSwitch D6
 #define countof(a) (sizeof(a) / sizeof(a[0]))
 
 /*
@@ -222,6 +225,43 @@ void unsetAlarm(int alarmId) {
     activeAlarm[alarmId].isAlarmTriggered = 1;
 }
 
+int setHour(int providedHour) {
+    return providedHour > 23 ? (providedHour - 24) : providedHour;
+}
+
+/*
+  Description - Set the alarm
+  alarmId Unique ID for each alarm
+  alarmType [1 for Hour | 2 for Minute]
+  duration Duration of alarm (i.e. For how long you want to set alarm)
+*/
+void updateAlarm(int alarmId, int alarmType, int duration) {
+    if (activeAlarm[alarmId].alarmId == alarmId) {
+        int tempMinute = 0;
+        int tempHour = 0;
+        // Set this flag so that next time, it can be set again
+        activeAlarm[alarmId].isAlarmTriggered = 0;
+
+        // alarmType for Hour
+        if (alarmType == 1) {
+            tempHour = activeAlarm[alarmId].endTimeHour + duration;
+            activeAlarm[alarmId].endTimeHour = setHour(tempHour);
+        }
+
+        // alarmType for Minute
+        if (alarmType == 2) {
+            tempMinute = activeAlarm[alarmId].endTimeMinute + duration;
+            if (tempMinute > 59) {
+                activeAlarm[alarmId].endTimeMinute = tempMinute - 60;
+                tempHour = activeAlarm[alarmId].endTimeHour + 1;
+                activeAlarm[alarmId].endTimeHour = setHour(tempHour);
+            } else {
+                activeAlarm[alarmId].endTimeMinute = tempMinute;
+            }
+        }
+    }
+}
+
 /*
   Description - Set the alarm
   alarmId Unique ID for each alarm
@@ -243,7 +283,7 @@ void setAlarm(int alarmId, int alarmType, int duration) {
 
     // alarmType for Hour
     tempHour = currentTime.Hour() + duration;
-    activeAlarm[alarmId].endTimeHour = alarmType == 1 ? (tempHour > 23 ? (tempHour - 24) : tempHour) : currentTime.Hour();
+    activeAlarm[alarmId].endTimeHour = alarmType == 1 ? setHour(tempHour) : currentTime.Hour();
 
     // alarmType for Minute
     tempMinute = currentTime.Minute() + duration;
@@ -251,7 +291,7 @@ void setAlarm(int alarmId, int alarmType, int duration) {
         if (tempMinute > 59) {
             activeAlarm[alarmId].endTimeMinute = tempMinute - 60;
             tempHour = currentTime.Hour() + 1;
-            activeAlarm[alarmId].endTimeHour = tempHour > 23 ? (tempHour - 24) : tempHour;
+            activeAlarm[alarmId].endTimeHour = setHour(tempHour);
         } else {
             activeAlarm[alarmId].endTimeMinute = tempMinute;
         }
@@ -266,8 +306,6 @@ void matchAlarm() {
     // Match condition
     for (int i=0; i < 2; i++) {
         // Look for motion 5 min before alarm triggered.
-        struct Time lookUpTime = {6, 0};
-
         if (currentTime.Hour() == activeAlarm[i].endTimeHour && currentTime.Minute() >= activeAlarm[i].endTimeMinute && currentTime.Second() >= activeAlarm[i].endTimeSecond && !activeAlarm[i].isAlarmTriggered) {
             actionMessageLogger("matchAlarm :: Timer Matched - alarm triggered");
             activeAlarm[i].isAlarmSet = 0;
@@ -277,9 +315,26 @@ void matchAlarm() {
             if (activeAlarm[i].alarmId == 0) {
                 // Turn OFF the kitchen bulb
                 turnBulb("OFF", "kitchenBulb");
+                // unset the 2nd alarm
+                unsetAlarm(1);
                 // Writting the file
                 char msgString[] = "kit-Auto:OFF\n";
                 writeFile(msgString);
+            }
+
+            if (activeAlarm[i].alarmId == 1) {
+                Serial.println("Lookup period started");
+                motionSensorStatus = digitalRead(kitchenMotionSensor);
+                // Activity detected
+                if (motionSensorStatus == HIGH) {
+                  // AlarmId, AlarmType = mintue, Duration in mintue
+                  // Increase the main alarm timeline by 5 minutes
+                  updateAlarm(0, 2, 5);
+                  // Increase the second alarm also by 5 min
+                  updateAlarm(1, 2, 5);
+
+                  Serial.println("UpdatAlarm called");
+                }               
             }
         }
     }
@@ -292,8 +347,11 @@ void kitchen_control() {
             Serial.println("button pressed ON, setting alarm");
             // Check the active hours
             checkActiveHours();
-            // alarmId, alarmType, duration,
+            // First Alarm configured - alarmId, alarmType, duration,
             setAlarm(0, 2, kitchenLightOnDuration);
+            // Setup the second alarm for lookup action - detect motion [Just before 3 minute before closing the light]
+            // SetAlarm - alarmId, alarmType, duration
+            setAlarm(1, 2, (kitchenLightOnDuration - 3));
             // Turn On the kitchen bulb
             turnBulb("ON", "kitchenBulb");
             // Set the flag true
@@ -308,7 +366,9 @@ void kitchen_control() {
     // when kitchen switch pressed = OFF
     if (digitalRead(kitchenBulbSwitch) == HIGH && isKitchenLedOn) {
         Serial.println("button pressed OFF");
+        // Unset both the alarm
         unsetAlarm(0);
+        unsetAlarm(1);
         isKitchenLedOn = false;
         turnBulb("OFF", "kitchenBulb");
         char msgString[] = "kitchen:OFF\n";
@@ -379,7 +439,7 @@ void loop() {
 
     if (!currentTime.IsValid()) {
         // Common Causes:
-        //    1) the battery on the device is low or even missing and the power line was disconnected
+        // the battery on the device is low or even missing and the power line was disconnected
         Serial.println("RTC lost confidence in the DateTime!");
     }
 
