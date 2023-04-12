@@ -15,10 +15,10 @@
 // For RTC module (DS1307)
 #include "RTClib.h"
 
-// On arduino > connected to I2C pins (above ARFT)
+// D1 and D2 allotted to RTC module DS1307
 RTC_DS1307 rtc;
 DateTime currentTime;
-// D1 and D2 allotted to RTC module DS1307
+
 #define buzzerPin D3
 #define motorRelay D5
 
@@ -30,7 +30,6 @@ struct Time {
 
 // Describe the time for which motor run and water the plant (In Seconds) - 45 Seconds
 unsigned int motorRunningTime = 45000;
-
 
 // Garden Active hours - Morning 10.10 AM to 11.10 AM
 struct Time activeHourStartTime = {10, 10};
@@ -46,23 +45,21 @@ bool diffBtwTimePeriod(struct Time start, struct Time end) {
    return (start.hours - end.hours) >= 0;
 }
 
-// Set light ON duration in case time fall btw active hours
+// Return true if current time falls between active hours
 bool isActiveHours() {
     return diffBtwTimePeriod({currentTime.hour(), currentTime.minute()}, activeHourStartTime) && diffBtwTimePeriod(activeHourEndTime, {currentTime.hour(), currentTime.minute()});
 }
 
 void lookNPlantWater() {
-    // Active hours starts from 8.10 am to 9.10 am
+
     if (isActiveHours()) {
-        Serial.print("Running the pump");
-        // Make the one short beep
+        // Make one short beep
         digitalWrite(buzzerPin, HIGH);
         delay(500);
         digitalWrite(buzzerPin, LOW);
         delay(500);
 
-        // Run the motor - Make relay high
-        // Turn the motor ON for 1 minute
+        Serial.print("Running the pump for specified time = 45 second");
         digitalWrite(motorRelay, HIGH);
         delay(motorRunningTime);
         digitalWrite(motorRelay, LOW);
@@ -110,13 +107,12 @@ void setup() {
   rtcSetup();
 
   delay(1000);
-  // Look for a schedule time for watering the plants
+
+  // Look and plant the water at schedule time
   lookNPlantWater();
 
-  // Deep sleep mode for 30 seconds, the ESP8266 wakes up by itself when GPIO 16 (D0 in NodeMCU board) is connected to the RESET pin
   Serial.println("I'm awake, but I'm going into deep sleep mode for 1 hour");
   // Deep sleep time - 3600 Second ~ 1 Hour
-  // ESP.deepSleep(120e6);
   ESP.deepSleep(3600e6);
 }
 
