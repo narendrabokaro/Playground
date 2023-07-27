@@ -106,6 +106,6 @@ void loop() {
       isTubelightOn = false;
       delay(100);
   }
-1000
-  delay();
+
+  delay(1000);
 }
