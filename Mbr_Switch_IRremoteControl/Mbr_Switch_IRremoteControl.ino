@@ -2,18 +2,12 @@
   Filename - MBR and GBR switch remote - NodeMCU version
   Description - Designed for special requirement where master switch panel is not easily accessible.
   Requirement -
-    > Supports IR remote control operation and normal panel switching operation.
-
+    > Maintain the device state inside ESP 8266 EEPROM memory.
   version - 2.0.0
  *************************************************************/
-// For RTC module (DS1307)
-#include "RTClib.h"
 #include <IRremote.h>
 #include <EEPROM.h>
 
-// D1 and D2 allotted to RTC module DS1307 (I2C support)
-RTC_DS1307 rtc;
-DateTime currentTime;
 IRrecv IR(D7);
 
 #define fanRelay D3
@@ -30,51 +24,12 @@ boolean isTubelightOn = false;
 int fanMemAddr = 0;
 int tubeMemAddr = 4;
 
-// Time for various comparision
-struct Time {
-    int hours;
-    int minutes;
-};
-
-// For RTC module setup
-void rtcSetup() {
-    Serial.println("rtcSetup :: Health status check");
-    delay(1000);
-
-    if (!rtc.begin()) {
-        Serial.println("rtcSetup :: Couldn't find RTC");
-        Serial.flush();
-        while (1) delay(10);
-    }
-
-    if (!rtc.isrunning()) {
-        Serial.println("rtcSetup :: RTC is NOT running, Please uncomment below lines to set the time!");
-        // When time needs to be set on a new device, or after a power loss, the
-        // following line sets the RTC to the date & time this sketch was compiled
-        //rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-        
-        // This line sets the RTC with an explicit date & time, for example to set
-        // January 21, 2014 at 3am you would call:
-        // rtc.adjust(DateTime(2014, 1, 21, 3, 0, 0));
-    }
-
-    Serial.println("rtcSetup :: RTC is running fine and Current time >");
-    currentTime = rtc.now();
-    Serial.print(currentTime.hour());
-    Serial.print(":");
-    Serial.print(currentTime.minute());
-    Serial.print(":");
-    Serial.print(currentTime.second());
-}
-
 void setup() {
     // ESP8266 have 512 bytes of internal EEPROM
     EEPROM.begin(512);
     Serial.begin(9600);
 
     IR.enableIRIn();
-    // Setup the RTC mmodule
-    rtcSetup();
 
     pinMode(fanRelay, OUTPUT);
     pinMode(tubeLightRelay, OUTPUT);
@@ -96,6 +51,8 @@ int readMemory(int addr) {
 }
 
 void writeMemory(int addr, int writeValue) {
+    Serial.println("Written on memory with value : ");
+    Serial.println(writeValue);
     // Write the memory address
     EEPROM.write(addr, writeValue);
     EEPROM.commit();
@@ -104,10 +61,12 @@ void writeMemory(int addr, int writeValue) {
 void actionBasedOnDeviceState() {
     // Check for the fan last state
     if (readMemory(fanMemAddr) == 1) {
+        Serial.println("Found : Earlier Fan was switched ON");
         turnDevice(fanRelay, 1);
     }
 
     if (readMemory(tubeMemAddr) == 1) {
+        Serial.println("Found : Earlier tube light was switched ON");
         turnDevice(tubeLightRelay, 1);
     }
 }
