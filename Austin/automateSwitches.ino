@@ -5,12 +5,13 @@
 * 2. If auto mode selected then only set the alarm
 * 3. Dont allow to alarm for pass time
 * 4. create a flag to keep that fresh time has been selected
+* 5. timeMatchToSwitchOffLight() - turn off the Led + Remove this alarm + 
 */
 
 #define BLYNK_PRINT Serial
 #define BLYNK_TEMPLATE_ID "TMPL2dIz_IQKc"
 #define BLYNK_TEMPLATE_NAME "austinHomeProject"
-#define BLYNK_AUTH_TOKEN "h8Nh69YR2RpXDDD-ydl48xtA0_jhl4jc"
+#define BLYNK_AUTH_TOKEN "<dkadflkdsflsd>-ydl48xtA0_jhl4jc"
 
 #include <ESP8266WiFi.h>
 #include <BlynkSimpleEsp8266.h>
@@ -27,7 +28,7 @@
 
 // WiFi credentials.
 char ssid[] = "Spectrum326";
-char pass[] = "goofycountry240";
+char pass[] = "yourpassword";
 
 // Function creates the timer object
 BlynkTimer timer;
@@ -46,24 +47,32 @@ int autoModeButtonState = 0;
 int whenToSwitchOffLightHour = 7;
 int whenToSwitchOffLightMinute = 10;
 
+// Time for which condition satisfy
+
 // Time for turning ON the light [Arming/ Disarming]
-unsigned int targetHour;
-unsigned int targetMinute;
+unsigned int targetStartHour;
+unsigned int targetStartMinute;
+
+unsigned int targetEndHour;
+unsigned int targetEndMinute;
+
+uint32_t targetStartTime;
+uint32_t targetEndTime;
 
 // Define NTP Client to get time
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "pool.ntp.org");
 
-void assignUserTimeFromTimerCompoent(const uint32_t seconds, unsigned int &targetHour, unsigned int &targetMinute) {
+void assignUserTimeFromTimerComponent(const uint32_t seconds, unsigned int &targetStartHour, unsigned int &targetStartMinute) {
     uint32_t t = seconds;
     uint8_t ss;
 
     ss = t % 60;
     t = (t - ss)/60;
-    targetMinute = t % 60;
+    targetStartMinute = t % 60;
 
-    t = (t - targetMinute)/60;
-    targetHour = t;
+    t = (t - targetStartMinute)/60;
+    targetStartHour = t;
 }
 
 // Method full dedicated to turning LED on/off
@@ -71,7 +80,7 @@ void ledEvent(bool turnedOn) {
     if (turnedOn) {
       // Turn the light ON
       // TODO : make conditional
-      Serial.print("Turn on the light");
+      Serial.println("Turn on the light");
       // ESP LED trurned ON
       digitalWrite(LED_BUILTIN, LOW);
 
@@ -82,7 +91,7 @@ void ledEvent(bool turnedOn) {
     } else {
       // Turn the light Off
       // TODO : make conditional
-      Serial.print("Turn off the light");
+      Serial.println("Turn off the light");
       // ESP LED trurned Off
       digitalWrite(LED_BUILTIN, HIGH);
 
@@ -93,62 +102,76 @@ void ledEvent(bool turnedOn) {
     }
 }
 
+/*
+* Description Keep checking for time match when to turn off
+*/
 void timeMatchToSwitchOffLight() {
     timeClient.update();
+    uint32_t currentTime;
+    uint32_t whenToSwitchOffLightTime;
+
     int currentHour = timeClient.getHours();
     int currentMinute = timeClient.getMinutes();
+    currentTime = currentHour * 3600 + currentMinute * 60;
+    whenToSwitchOffLightTime = whenToSwitchOffLightHour * 3600 + whenToSwitchOffLightMinute * 60;
 
-    Serial.print("timeMatchToSwitchOffLight Func :");
-    Serial.print(currentHour);
-    Serial.println(currentMinute);
+    Serial.println("Swtich Off Timer EpochTime :");
+    Serial.print(currentTime);
+    Serial.println("Timer will Switch Off Light @ ");
+    Serial.print(whenToSwitchOffLightTime);
 
     // If autoMode Button pressed + current time matches with target time and bulb is on
-    if (autoModeButtonState && (currentHour == whenToSwitchOffLightHour && currentMinute >= whenToSwitchOffLightMinute) && isLightTurnedOn) {
-        Serial.print("timeMatchToSwitchOffLight : Condition matched");
+    if (autoModeButtonState && isLightTurnedOn && currentTime >= whenToSwitchOffLightTime) {
+        Serial.println("whenToSwitchOffLightTime : Condition matched");
         // Turn OFF the light
         ledEvent(false);
+        // Remove both timer
     }
 }
 
-void timeMatch() {
+void timeMatchToSwitchOnLight() {
     timeClient.update();
+    uint32_t currentTime;
+
     int currentHour = timeClient.getHours();
     int currentMinute = timeClient.getMinutes();
+    currentTime = currentHour * 3600 + currentMinute * 60;
 
-    Serial.print("TimeMatch Func :");
-    Serial.print(currentHour);
-    Serial.println(currentMinute);
+    Serial.println("current EpochTime :");
+    Serial.print(currentTime);
+    Serial.println("Timer will Switch On Light @ ");
+    Serial.print(targetEndTime);
 
-    // If autoMode Button pressed + current time matches with target time and bulb is off
-    if (autoModeButtonState && (currentHour == targetHour && currentMinute >= targetMinute) && !isLightTurnedOn) {
-        Serial.print("timeMatch inside");
+    // If autoMode Button pressed + bulb is off + current time matches with target time
+    if (autoModeButtonState && !isLightTurnedOn && (currentTime >= targetStartTime && currentTime <= targetEndTime)) {
+        Serial.println("timeMatchToSwitchOnLight timer match");
         // Turn ON the light ON
         ledEvent(true);
     }
 }
 
 void enableAutoMateAlarm (int &autoMateBttnTimerID) {
-  Serial.print("Alarm enabled :");
-  Serial.print(targetHour);
-  Serial.print(targetMinute);
-  // Set the timer to execute timeMatch() every minute
-  autoMateBttnTimerID = timer.setInterval(60000L, timeMatch);
+  Serial.println("enableAutoMateAlarm enabled :");
+  // Set the timer to execute timeMatchToSwitchOnLight() every minute
+  autoMateBttnTimerID = timer.setInterval(60000L, timeMatchToSwitchOnLight);
 }
 
 void disableAutoMateAlarm (int &autoMateBttnTimerID, BlynkTimer &timer) {
-  Serial.print("Alarm disabled");
+  Serial.println("disableAutoMateAlarm disabled");
   timer.disable(autoMateBttnTimerID);
 }
 
 // Timer to check when to switch off the light
 void setLedOffAlarm(int &turnOffLedTimerID) {
+  Serial.println("setLedOffAlarm enabled :");
   // set a new alarm
-  // Set the timer to execute timeMatch() every minute
+  // Set the timer to execute timeMatchToSwitchOffLight() every minute
   turnOffLedTimerID = timer.setInterval(60000L, timeMatchToSwitchOffLight);
 }
 
 // Remove the above timer when auto_mate_btn is dis-engage
 void unsetLedOffAlarm(int &turnOffLedTimerID, BlynkTimer &timer) {
+  Serial.println("unsetLedOffAlarm enabled :");
   // unset above alarm
   timer.disable(turnOffLedTimerID);
 }
@@ -197,11 +220,19 @@ BLYNK_WRITE(AUTO_MODE_BTN) {
   }
 }
 
-// Method called when user set the auto start time
+// Method being called when user set the time component (HH:MM)
 // And then user has to press the AutoMode button from mobile
 BLYNK_WRITE(SET_AUTO_START_TIME) {
-  if (param[0].asInt() != 0) {
-      assignUserTimeFromTimerCompoent(param[0].asInt(), targetHour, targetMinute);
+  uint32_t inSeconds = param[0].asInt();
+
+  if (inSeconds != 0) {
+      targetStartTime = inSeconds;
+      Serial.println("Start timer: ");
+      Serial.print(targetStartTime);
+      // Set the target end time - 5 minute later
+      targetEndTime = inSeconds + 300;
+      Serial.println("End timer: ");
+      Serial.print(targetEndTime);
   }
 }
 
