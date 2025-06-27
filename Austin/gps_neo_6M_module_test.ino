@@ -1,3 +1,5 @@
+// Search for TinyGPSPlus (TinyGPS++) and install the library by Mikal Hart
+
 #include <SoftwareSerial.h>
 #include <TinyGPS++.h>
 
