@@ -3,23 +3,68 @@
 #include <SoftwareSerial.h>
 #include <Wire.h>
 #include <Adafruit_BMP280.h>
+#include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>
 
 // PIN CONFIGURATION
 #define GPS_TX_PIN 12   // D6
 #define GPS_RX_PIN 13   // D7
 #define LED_PIN 14      // D5
-#define SWITCH_PIN 0    // D3
+#define REC_SWITCH 0    // D3 (Log Switch)
+#define WIFI_SWITCH 2   // D4 (WiFi Switch)
 #define SDA_PIN 4       // D2
 #define SCL_PIN 5       // D1
 
 TinyGPSPlus gps;
 SoftwareSerial ss(GPS_TX_PIN, GPS_RX_PIN);
 Adafruit_BMP280 bmp;
+ESP8266WebServer server(80);
 
 File logFile;
 bool isLogging = false;
-float altBaseline = 0; // Takeoff altitude reference
+bool wifiActive = false;
+float altBaseline = 0;
 unsigned long lastLogTime = 0;
+
+// --- WEB SERVER FUNCTIONS ---
+
+void handleRoot() {
+  String html = "<html><head><meta name='viewport' content='width=device-width, initial-scale=1'>";
+  html += "<style>body{font-family:sans-serif;padding:20px;} table{width:100%;border-collapse:collapse;} ";
+  html += "td,th{padding:10px;border-bottom:1px solid #ddd;} .del{color:red;}</style></head>";
+  html += "<body><h1>Flight Logs</h1><table><tr><th>Filename</th><th>Action</th></tr>";
+
+  Dir dir = LittleFS.openDir("/");
+  while (dir.next()) {
+    if (dir.fileName().endsWith(".kml")) {
+      html += "<tr><td>" + dir.fileName() + "</td><td>";
+      html += "<a href='/get?file=" + dir.fileName() + "'>Download</a> | ";
+      html += "<a href='/del?file=" + dir.fileName() + "' class='del'>Delete</a></td></tr>";
+    }
+  }
+  html += "</table><br><a href='/'>Refresh</a></body></html>";
+  server.send(200, "text/html", html);
+}
+
+void handleDownload() {
+  String path = server.arg("file");
+  if (LittleFS.exists(path)) {
+    File f = LittleFS.open(path, "r");
+    server.streamFile(f, "application/vnd.google-earth.kml+xml");
+    f.close();
+  }
+}
+
+void handleDelete() {
+  String path = server.arg("file");
+  if (LittleFS.exists(path)) {
+    LittleFS.remove(path);
+  }
+  server.sendHeader("Location", "/");
+  server.send(303);
+}
+
+// --- MAIN SETUP & LOOP ---
 
 void setup() {
   Serial.begin(115200);
@@ -27,73 +72,71 @@ void setup() {
   Wire.begin(SDA_PIN, SCL_PIN);
   
   pinMode(LED_PIN, OUTPUT);
-  pinMode(SWITCH_PIN, INPUT_PULLUP);
+  pinMode(REC_SWITCH, INPUT_PULLUP);
+  pinMode(WIFI_SWITCH, INPUT_PULLUP);
 
-  if (!LittleFS.begin()) {
-    Serial.println("LittleFS Mount Failed");
-    return;
-  }
-  
-  if (!bmp.begin(0x76)) { // Change to 0x77 if 0x76 fails
-    Serial.println("BMP280 not found");
-  }
+  if (!LittleFS.begin()) Serial.println("FS Error");
+  if (!bmp.begin(0x76)) Serial.println("BMP Error");
+
+  WiFi.mode(WIFI_OFF);
 }
 
 void loop() {
   while (ss.available() > 0) gps.encode(ss.read());
 
-  bool switchOn = (digitalRead(SWITCH_PIN) == LOW);
+  bool recSw = (digitalRead(REC_SWITCH) == LOW);
+  bool wifiSw = (digitalRead(WIFI_SWITCH) == LOW);
   bool hasFix = (gps.location.isValid() && gps.satellites.value() >= 4);
 
-  // LED STATUS INDICATORS
+  // WiFi Logic
+  if (wifiSw && !wifiActive) {
+    WiFi.softAP("RC_FLIGHT_DATA", "12345678");
+    server.on("/", handleRoot);
+    server.on("/get", handleDownload);
+    server.on("/del", handleDelete);
+    server.begin();
+    wifiActive = true;
+    Serial.println("WiFi On: 192.168.4.1");
+  } else if (!wifiSw && wifiActive) {
+    WiFi.mode(WIFI_OFF);
+    wifiActive = false;
+  }
+  if (wifiActive) server.handleClient();
+
+  // LED Logic
   if (!hasFix) {
-    digitalWrite(LED_PIN, (millis() / 200) % 2); // FAST FLASH: Searching
+    digitalWrite(LED_PIN, (millis() / 200) % 2); // Fast Flash
   } else if (isLogging) {
-    digitalWrite(LED_PIN, (millis() / 1000) % 2); // SLOW BLINK: Recording
+    digitalWrite(LED_PIN, (millis() / 1000) % 2); // Slow Blink
   } else {
-    digitalWrite(LED_PIN, HIGH); // SOLID: Ready to record
+    digitalWrite(LED_PIN, HIGH); // Solid Ready
   }
 
-  // START RECORDING (Switch flipped ON + GPS Fix)
-  if (switchOn && !isLogging && hasFix && gps.date.isValid()) {
-    char path[30];
+  // Record Logic
+  if (recSw && !isLogging && hasFix) {
+    char path[25];
     sprintf(path, "/%02d%02d_%02d%02d.kml", gps.date.day(), gps.date.month(), gps.time.hour(), gps.time.minute());
-    
     logFile = LittleFS.open(path, "w");
     if (logFile) {
-      // KML Header
-      logFile.println("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
-      logFile.println("<kml xmlns=\"http://www.opengis.net\"><Document><Placemark><name>Flight Path</name>");
-      logFile.println("<LineString><extrude>1</extrude><altitudeMode>relativeToGround</altitudeMode><coordinates>");
-      
-      // Auto-Zero: Capture ground altitude as baseline
+      logFile.println("<?xml version=\"1.0\" encoding=\"UTF-8\"?><kml xmlns=\"http://www.opengis.net\"><Document><Placemark><LineString><altitudeMode>relativeToGround</altitudeMode><coordinates>");
       altBaseline = bmp.readAltitude(1013.25); 
       isLogging = true;
-      Serial.print("Recording to: "); Serial.println(path);
+      Serial.println("Recording...");
     }
   }
 
-  // LOG DATA EVERY 2 SECONDS
   if (isLogging && millis() - lastLogTime >= 2000) {
     lastLogTime = millis();
-    
-    // Relative Altitude Calculation
-    float currentAlt = bmp.readAltitude(1013.25) - altBaseline;
-
-    // KML format: longitude,latitude,altitude
-    logFile.print(gps.location.lng(), 6);
-    logFile.print(",");
-    logFile.print(gps.location.lat(), 6);
-    logFile.print(",");
-    logFile.println(currentAlt, 1);
-    logFile.flush(); 
+    float relAlt = bmp.readAltitude(1013.25) - altBaseline;
+    Serial.printf("Lat: %.6f Lng: %.6f Alt: %.1fm\n", gps.location.lat(), gps.location.lng(), relAlt);
+    logFile.printf("%.6f,%.6f,%.1f\n", gps.location.lng(), gps.location.lat(), relAlt);
+    logFile.flush();
   }
 
-  // STOP RECORDING (Switch flipped OFF)
-  if (!switchOn && isLogging) {
+  if (!recSw && isLogging) {
     logFile.println("</coordinates></LineString></Placemark></Document></kml>");
     logFile.close();
     isLogging = false;
-    Serial.println("Flight Saved.");
+    Serial.println("Saved.");
   }
 }
