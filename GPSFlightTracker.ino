@@ -7,11 +7,14 @@
 #include <ESP8266WebServer.h>
 
 // PIN CONFIGURATION
+// GPS Pins
 #define GPS_TX_PIN 12   // D6
 #define GPS_RX_PIN 13   // D7
+
 #define LED_PIN 14      // D5
 #define REC_SWITCH 0    // D3 (Log Switch)
 #define WIFI_SWITCH 2   // D4 (WiFi Switch)
+// BMP280 Pins
 #define SDA_PIN 4       // D2
 #define SCL_PIN 5       // D1
 
@@ -82,7 +85,26 @@ void setup() {
 }
 
 void loop() {
-  while (ss.available() > 0) gps.encode(ss.read());
+  // Check if we are receiving ANY bytes from the GPS
+  while (ss.available() > 0) {
+    char c = ss.read();
+    gps.encode(c);
+  }
+
+  // Debugging message - Print status every 5 seconds
+  static unsigned long lastDebug = 0;
+  if (millis() - lastDebug > 5000) {
+    lastDebug = millis();
+    Serial.println("--- GPS Debug Status ---");
+    Serial.print("Chars Processed: "); Serial.println(gps.charsProcessed());
+    Serial.print("Satellites in View: "); Serial.println(gps.satellites.value());
+    
+    if (gps.charsProcessed() < 10) {
+      Serial.println(">> ERROR: No data from GPS. Check TX/RX wiring!");
+    } else if (gps.satellites.value() == 0) {
+      Serial.println(">> SEARCHING: GPS is talking, but no satellites found. Go outside!");
+    }
+  }
 
   bool recSw = (digitalRead(REC_SWITCH) == LOW);
   bool wifiSw = (digitalRead(WIFI_SWITCH) == LOW);
