@@ -1,3 +1,4 @@
+// Not maintaining anymore here, moved to GPSFlightTracker repo 
 #include <LittleFS.h>
 #include <TinyGPS++.h>
 #include <SoftwareSerial.h>
